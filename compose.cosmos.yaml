@@ -1,7 +1,7 @@
 # Import as an entirely NEW ServApp in Cosmos. Never replace existing services.
 services:
   matrix-xop-worker:
-    image: ${XOP_IMAGE:?Set XOP_IMAGE to the GHCR image built on GitHub}
+    image: ghcr.io/modegy/matrix-xop-worker:xop-347f207-d13b12944ca428f5d8d3b1f0d90974d6c832440a
     container_name: matrix-xop-worker
     restart: unless-stopped
     init: true
