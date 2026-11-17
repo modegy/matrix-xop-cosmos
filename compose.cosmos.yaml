@@ -1,0 +1,42 @@
+# Import as an entirely NEW ServApp in Cosmos. Never replace existing services.
+services:
+  matrix-xop-worker:
+    image: ${XOP_IMAGE:?Set XOP_IMAGE to the GHCR image built on GitHub}
+    container_name: matrix-xop-worker
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:18761:8761"
+    environment:
+      XOP_API_TOKEN: ${XOP_API_TOKEN:?Create a private token of at least 32 characters}
+      XOP_JAVA_HEAP_MB: "768"
+      XOP_TIMEOUT_SECONDS: "900"
+      XOP_RETENTION_SECONDS: "3600"
+      XOP_MAX_APK_MB: "128"
+      XOP_MAX_OUTPUT_MB: "256"
+    volumes:
+      - matrix_xop_jobs:/data/jobs
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+    read_only: true
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    cpus: "0.70"
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8761/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - matrix_xop_private
+volumes:
+  matrix_xop_jobs:
+networks:
+  matrix_xop_private:
+    driver: bridge
