@@ -1,6 +1,10 @@
 name: Build official XopProtector for Cosmos
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-xop-image.yml'
 permissions:
   contents: read
   packages: write
@@ -37,7 +41,9 @@ jobs:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon :packer:jar exportShellFiles
+          # Upstream gradle.properties contains a Windows-only UniMP SDK path.
+          # Use an absent Linux path to disable that optional module without changing upstream sources.
+          ./gradlew --no-daemon -Punimp.sdk.libs=/tmp/xop-unimp-absent :packer:jar exportShellFiles
           mkdir -p "$GITHUB_WORKSPACE/engine"
           cp packer/build/libs/protector-packer-0.8.1.jar "$GITHUB_WORKSPACE/engine/packer.jar"
           cp -a executable/shell-files "$GITHUB_WORKSPACE/engine/shell-files"
