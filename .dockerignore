@@ -1,0 +1,7 @@
+.git
+.github
+*.zip
+*.apk
+README.md
+compose.cosmos.yaml
+__pycache__
