@@ -35,6 +35,20 @@ jobs:
           cd /tmp/XopProtector
           git checkout --detach 347f20717e32d9d93d081d00c27d91ce75bd84be
           test "$(git rev-parse HEAD)" = "347f20717e32d9d93d081d00c27d91ce75bd84be"
+      - name: Remove unsupported Windows-only fallback from temporary upstream checkout
+        working-directory: /tmp/XopProtector
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("settings.gradle.kts")
+          content = p.read_text()
+          target = '    file("E:/Android/SDK-Android@5.14-20260706/SDK/libs"),\n'
+          if content.count(target) != 1:
+              raise SystemExit("Upstream settings changed: inspect before modifying the build")
+          p.write_text(content.replace(target, "", 1))
+          assert target not in p.read_text()
+          print("Linux CI: removed invalid Windows UniMP fallback from temporary checkout")
+          PY
       - name: Build official Java packer and native shell
         working-directory: /tmp/XopProtector
         env:
