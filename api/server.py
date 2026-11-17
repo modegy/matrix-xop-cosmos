@@ -33,7 +33,7 @@ QUEUE = queue.Queue(maxsize=3)
 CAPACITY = threading.BoundedSemaphore(3)
 HEX_ID = re.compile(r"^[0-9a-f]{32}$")
 PREFIX = re.compile(r"^L(?:[A-Za-z_$][A-Za-z0-9_$]*/){1,16}(?:[A-Za-z_$][A-Za-z0-9_$]*;?)?$")
-SO_NAME = re.compile(r"^lib[A-Za-z0-9_.+-]{1,100}\\.so$")
+SO_NAME = re.compile(r"^lib[A-Za-z0-9_.+-]{1,100}\.so$")
 ABIS = {"all", "armeabi-v7a", "arm64-v8a", "x86", "x86_64"}
 
 def reject(code):
@@ -118,8 +118,8 @@ def apk_check(path, output=False):
         names = set()
         for entry in entries:
             name = entry.filename
-            if (name.startswith("/") or "\\\\" in name or ".." in name.split("/")
-                    or "\\x00" in name or entry.flag_bits & 1):
+            if (name.startswith("/") or "\\" in name or ".." in name.split("/")
+                    or "\x00" in name or entry.flag_bits & 1):
                 reject("XOP_APK_UNSAFE_ENTRY")
             total += entry.file_size
             if total > 1024 * 1024 * 1024:
