@@ -10,10 +10,10 @@ services:
     environment:
       XOP_API_TOKEN: ${XOP_API_TOKEN:?Create a private token of at least 32 characters}
       XOP_JAVA_HEAP_MB: "768"
-      XOP_TIMEOUT_SECONDS: "900"
+      XOP_TIMEOUT_SECONDS: "1800"
       XOP_RETENTION_SECONDS: "3600"
-      XOP_MAX_APK_MB: "128"
-      XOP_MAX_OUTPUT_MB: "256"
+      XOP_MAX_APK_MB: "256"
+      XOP_MAX_OUTPUT_MB: "512"
     volumes:
       - matrix_xop_jobs:/data/jobs
     tmpfs:
