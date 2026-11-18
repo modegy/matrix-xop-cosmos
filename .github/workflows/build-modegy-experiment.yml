@@ -70,6 +70,37 @@ jobs:
           test -s "$GITHUB_WORKSPACE/engine/shell-files/dex/classes.dex"
           test -s "$GITHUB_WORKSPACE/engine/shell-files/libs/arm64-v8a/libMODEGYPRO.so"
           test -s "$GITHUB_WORKSPACE/engine/shell-files/libs/armeabi-v7a/libMODEGYPRO.so"
+      - name: Rebrand dependent ELF SONAME and DT_NEEDED on isolated build
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq patchelf
+          for abi in arm64-v8a armeabi-v7a; do
+            root="$GITHUB_WORKSPACE/engine/shell-files/libs/$abi"
+            test -s "$root/libshadowhook.so"
+            test -s "$root/libMODEGYPRO.so"
+            patchelf --set-soname libMODEGY_PROTECTION.so "$root/libshadowhook.so"
+            mv "$root/libshadowhook.so" "$root/libMODEGY_PROTECTION.so"
+            patchelf --replace-needed libshadowhook.so libMODEGY_PROTECTION.so "$root/libMODEGYPRO.so"
+            patchelf --print-needed "$root/libMODEGYPRO.so" | grep -Fx libMODEGY_PROTECTION.so
+            if patchelf --print-needed "$root/libMODEGYPRO.so" | grep -Fx libshadowhook.so; then
+              echo "Old shadowhook dependency remains" >&2
+              exit 1
+            fi
+          done
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          for abi in ("arm64-v8a", "armeabi-v7a"):
+              root=Path("engine/shell-files/libs")/abi
+              for name in ("libMODEGYPRO.so", "libMODEGY_PROTECTION.so"):
+                  p=root/name
+                  output=subprocess.check_output(["readelf","-lW",str(p)],text=True)
+                  aligns=[int(x.split()[-1],16) for x in output.splitlines()
+                          if x.strip().startswith("LOAD ")]
+                  if not aligns or min(aligns)<16384 and abi=="arm64-v8a":
+                      raise SystemExit(f"ELF page alignment failed: {p} {aligns}")
+                  print(f"{p}: PT_LOAD alignment {min(aligns)} bytes")
+          PY
       - name: Verify experimental MODEGYPRO shell signatures
         run: |
           python3 - <<'PY'
