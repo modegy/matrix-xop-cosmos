@@ -161,7 +161,51 @@ def patch_tree(root: Path) -> None:
     p, count = expression.subn("\n            // Keep size report beside output, not inside APK.", p)
     if count != 1:
         raise RuntimeError("APK-embedded diagnostic report changed")
+    # Real authenticated encryption of the policy (nonce || ciphertext || GCM tag).
+    # The per-APK assets AES key is already derived by the native key ladder
+    # BEFORE runtime parses the configuration; retaining the HMAC after decrypt.
+    old_write = ('Files.writeString(new File(assetsProtector, "MODEGY_POLICY.dat").toPath(), config,'
+                 '\n                    StandardCharsets.UTF_8);')
+    new_write = ('Files.write(new File(assetsProtector, "MODEGY_POLICY.dat").toPath(),'
+                 '\n                    CryptoUtils.aesGcmEncrypt(assetsAesKey,'
+                 ' config.getBytes(StandardCharsets.UTF_8)));')
+    if p.count(old_write) != 1:
+        raise RuntimeError("Expected policy writer unavailable")
+    p = p.replace(old_write, new_write)
     packer.write_text(p, encoding="utf-8")
+
+    # Runtime decrypts policy into memory with the same per-app key, checks the
+    # GCM authentication tag, and only then verifies the existing config HMAC.
+    engine = root / "native/src/main/cpp/runtime/engine.cpp"
+    cpp = engine.read_text(encoding="utf-8")
+    needle = '#include "crypto/key_ladder.h"'
+    if cpp.count(needle) != 1:
+        raise RuntimeError("Runtime key ladder include changed")
+    cpp = cpp.replace(needle, needle + '\n#include "crypto/aes.h"')
+    old_parse = '    parse_config_json(read_file(config_path));'
+    new_parse = '''
+    std::string encrypted_policy = read_file(config_path);
+    if (encrypted_policy.size() <= 28 || state.config.assets_aes_key.size() != 16) {
+        PLOGE("Encrypted policy missing or invalid");
+        protector::risk::crash_exit();
+        return;
+    }
+    std::string policy_plain(encrypted_policy.size() - 28, '\\0');
+    if (!protector::crypto::aes128_gcm_decrypt(
+            state.config.assets_aes_key.data(),
+            reinterpret_cast<const uint8_t*>(encrypted_policy.data()),
+            encrypted_policy.size(),
+            reinterpret_cast<uint8_t*>(policy_plain.data()), policy_plain.size())) {
+        PLOGE("Encrypted policy authentication failed");
+        protector::risk::crash_exit();
+        return;
+    }
+    parse_config_json(policy_plain);
+    std::fill(policy_plain.begin(), policy_plain.end(), '\\0');'''.strip('\n')
+    if cpp.count(old_parse) != 1:
+        raise RuntimeError("Runtime config loader changed")
+    cpp = cpp.replace(old_parse, new_parse)
+    engine.write_text(cpp, encoding="utf-8")
 
     # The old hardcoded length is for '/dexes.zip'. Use new filename length.
     dex = root / "native/src/main/cpp/dex/dex_file.cpp"
@@ -191,7 +235,8 @@ def patch_tree(root: Path) -> None:
     print("Runtime lib: libMODEGYPRO.so")
     print("Code payload: assets/MODEGY_PROTECTION/MODEGY_CORE.vmp")
     print("Diagnostic report: excluded from packaged APK")
-    print("Note: signed config/HMAC is NOT encrypted, and external shadowhook name unchanged.")
+    print("Policy encrypted using per-APK AES-128-GCM; native also verifies original HMAC.")
+    print("External libshadowhook.so is still unmodified pending ELF ABI tests.")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
