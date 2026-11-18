@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
+import zlib
 
 os.environ.setdefault("XOP_API_TOKEN", "0123456789abcdef0123456789abcdef")
 spec = importlib.util.spec_from_file_location("xop_server", Path(__file__).resolve().parents[1] / "api/server.py")
@@ -15,6 +16,11 @@ spec.loader.exec_module(s)
 
 def encoded(v):
     return base64.urlsafe_b64encode(json.dumps(v).encode()).decode().rstrip("=")
+
+def zipped(v):
+    compressor = zlib.compressobj(level=9, wbits=-zlib.MAX_WBITS)
+    packed = compressor.compress(json.dumps(v).encode()) + compressor.flush()
+    return "z:" + base64.urlsafe_b64encode(packed).decode().rstrip("=")
 
 class ValidationTests(unittest.TestCase):
     def test_options(self):
@@ -73,13 +79,13 @@ class ValidationTests(unittest.TestCase):
     def test_vmp_256_and_so_abi_selection(self):
         scope = ["Lsample/app/Feature%d;" % i for i in range(256)]
         for abi in ("all", "arm64-v8a", "armeabi-v7a", "x86", "x86_64"):
-            settings = s.parse_options(encoded({"profile": "balanced",
+            settings = s.parse_options(zipped({"profile": "balanced",
                 "protectSo": True, "soAbi": abi, "trueVmpPrefixes": scope}))
             args = s.cli_args(settings, Path("in.apk"), Path("out.apk"), Path("/tmp"))
             self.assertEqual(args[args.index("--protect-so-abi") + 1], abi)
             self.assertEqual(args.count("--true-vmp-prefix"), 256)
         with self.assertRaisesRegex(ValueError, "XOP_SCOPE_INVALID"):
-            s.parse_options(encoded({"trueVmpPrefixes": scope + ["Lsample/app/Feature256;"]}))
+            s.parse_options(zipped({"trueVmpPrefixes": scope + ["Lsample/app/Feature256;"]}))
 
     def test_so_name(self):
         s.parse_options(encoded({"soExclude":["libdemo.so"]}))
