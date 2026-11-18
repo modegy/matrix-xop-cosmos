@@ -58,6 +58,7 @@ def renamed(s: str) -> str:
     s = s.replace('"protector"', '"' + ASSET_DIR + '"')
     s = s.replace("libprotector.so", "libMODEGYPRO.so")
     s = s.replace("libprotector", "libMODEGYPRO")
+    s = s.replace("[XOP-SO]", "[MODEGY-SO]")
     s = s.replace('System.loadLibrary("protector")',
                   'System.loadLibrary("MODEGYPRO")')
     return s
