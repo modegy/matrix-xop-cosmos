@@ -70,6 +70,17 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"XOP_OPTIONS_INVALID"):
                 s.parse_options(encoded({"detectProxy":bad}))
 
+    def test_vmp_256_and_so_abi_selection(self):
+        scope = ["Lsample/app/Feature%d;" % i for i in range(256)]
+        for abi in ("all", "arm64-v8a", "armeabi-v7a", "x86", "x86_64"):
+            settings = s.parse_options(encoded({"profile": "balanced",
+                "protectSo": True, "soAbi": abi, "trueVmpPrefixes": scope}))
+            args = s.cli_args(settings, Path("in.apk"), Path("out.apk"), Path("/tmp"))
+            self.assertEqual(args[args.index("--protect-so-abi") + 1], abi)
+            self.assertEqual(args.count("--true-vmp-prefix"), 256)
+        with self.assertRaisesRegex(ValueError, "XOP_SCOPE_INVALID"):
+            s.parse_options(encoded({"trueVmpPrefixes": scope + ["Lsample/app/Feature256;"]}))
+
     def test_so_name(self):
         s.parse_options(encoded({"soExclude":["libdemo.so"]}))
         with self.assertRaisesRegex(ValueError, "XOP_SO_EXCLUDE_INVALID"):
