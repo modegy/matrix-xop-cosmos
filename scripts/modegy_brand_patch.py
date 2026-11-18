@@ -469,6 +469,57 @@ def patch_runtime_identity_and_diagnostics(root: Path) -> None:
             raise RuntimeError("Sensitive Java diagnostic remains: " + renamed_java)
         p.write_text(contents, encoding="utf-8")
 
+    # Rename selected non-framework shell helper entry points in all Java call
+    # sites together. Avoid generic reflection/JNI method name rewriting.
+    helper_names = {
+        "findBusinessApplication": "n5V7qR",
+        "markProvidersAlreadyInstalled": "u3D8wC",
+        "reattach": "j8U5vE",
+        "prefetchFacadeAsync": "k2X9aQ",
+    }
+    for p in shell.glob("*.java"):
+        body = p.read_text(encoding="utf-8")
+        for old_name, new_name in helper_names.items():
+            body = re.sub(r"\\b" + old_name + r"\\b", new_name, body)
+        p.write_text(body, encoding="utf-8")
+
+    # The reattach return value is never consumed by the shell callers; keep
+    # the actual operation inline but avoid a public mutable boolean success gate.
+    app_helper = shell / "Qm7A9R.java"
+    body = app_helper.read_text(encoding="utf-8")
+    head1 = "public static boolean j8U5vE(Application real) {"
+    head2 = "public static boolean j8U5vE(Application real, @Nullable Application proxyHint) {"
+    if body.count(head1) != 1 or body.count(head2) != 1:
+        raise RuntimeError("Application reattach signature changed")
+    body = body.replace(head1, head1.replace("boolean", "void"))
+    body = body.replace("return j8U5vE(real, null);", "j8U5vE(real, null);\n        return;")
+    body = body.replace(head2, head2.replace("boolean", "void"))
+    start = body.index(head2.replace("boolean", "void"))
+    end = body.index("    /**\n     * Move Application-scoped callback", start)
+    method = body[start:end]
+    if method.count("return true;") != 1 or method.count("return false;") < 1:
+        raise RuntimeError("Application reattach return structure changed")
+    method = method.replace("return true;", "return;").replace("return false;", "return;")
+    body = body[:start] + method + body[end:]
+
+    # Selected reflection and facade strings use the existing ModegyCodec
+    # rolling-XOR de-obfuscator. This hides literal names, not cryptographic
+    # confidentiality; do not confuse it with per-APK AES-GCM.
+    encoded_fields = (
+        "mBoundApplication", "mAllApplications", "mInitialApplication",
+        "mApplicationInfo", "mApplication", "mComponentCallbacks",
+        "mActivityLifecycleCallbacks", "mCallbacksController",
+        "mAssistCallbacks", "mLock",
+    )
+    for field in encoded_fields:
+        value = '"' + field + '"'
+        if value not in body: continue
+        raw = encoded(field)
+        bytes_java = ", ".join(
+            "(byte)0x%02x" % b if b >= 128 else "0x%02x" % b for b in raw)
+        body = body.replace(value, "ModegyCodec.d(new byte[]{" + bytes_java + "})")
+    app_helper.write_text(body, encoding="utf-8")
+
     log_h = root / "native/src/main/cpp/common/log.h"
     contents = log_h.read_text(encoding="utf-8")
     old = ('// Keep PLOGE for crash forensics (only fires right before a crash).\n'
@@ -502,7 +553,14 @@ def patch_runtime_identity_and_diagnostics(root: Path) -> None:
     contents = contents.replace(needle,
         needle + '    if (!g_enabled.load(std::memory_order_acquire)) return;\n')
     report.write_text(contents, encoding="utf-8")
-    print("Decoy generation and runtime class synchronized; diagnostic release logs disabled")
+    # Prevent pre-policy failures from writing a reason file.
+    contents = report.read_text(encoding="utf-8")
+    state_flag = "static std::atomic_bool g_enabled{true};"
+    if contents.count(state_flag) != 1:
+        raise RuntimeError("Threat reporting default drift")
+    report.write_text(contents.replace(state_flag,
+        "static std::atomic_bool g_enabled{false};"), encoding="utf-8")
+    print("Decoy generator verified; obfuscated Java shell, release diagnostics disabled")
 
 
 def patch_tree(root: Path) -> None:
