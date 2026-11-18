@@ -117,6 +117,11 @@ jobs:
           dex=(p/'dex/classes.dex').read_bytes()
           if b'com/modegypro/protection/shell/ModegyRuntime' not in dex:
               raise SystemExit('Missing renamed runtime class in shell DEX')
+          for leaked in (b'protector.ProxyACF', b'protector.DexScan',
+                         b'protector.AppReplace', b'prefetch facade failed',
+                         b'verifySignature failed', b'findBusinessApplication failed'):
+              if leaked in dex:
+                  raise SystemExit('Sensitive Java log remains in release shell: '+repr(leaked))
           for abi in ('arm64-v8a','armeabi-v7a'):
               libs=p/'libs'/abi
               assert (libs/'libMODEGYPRO.so').is_file()
