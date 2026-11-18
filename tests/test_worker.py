@@ -39,7 +39,34 @@ class ValidationTests(unittest.TestCase):
                 s.apk_check(f,output=True)
             with zipfile.ZipFile(f,"a") as z:
                 z.writestr("assets/protector/config.json",b"{}")
+            # A single legacy-path file is NOT enough to prove protection.
+            with self.assertRaisesRegex(ValueError,"XOP_OUTPUT_NOT_PROTECTED"):
+                s.apk_check(f,output=True)
+            with zipfile.ZipFile(f,"a") as z:
+                z.writestr("assets/protector/dexes.zip",b"PDX1-legacy")
+                z.writestr("assets/protector/code.bin",b"\\x04\\x00\\x00\\x00")
             s.apk_check(f,output=True)
+
+    def test_modegy_output_bundle(self):
+        with tempfile.TemporaryDirectory() as d:
+            f=Path(d)/"modegy.apk"
+            with zipfile.ZipFile(f,"w") as z:
+                z.writestr("AndroidManifest.xml",b"manifest")
+                z.writestr("classes.dex",b"dex")
+                z.writestr("assets/MODEGY_PROTECTION/MODEGY_DATA.zip",b"PDX1-ciphertext")
+                z.writestr("assets/MODEGY_PROTECTION/MODEGY_CORE.vmp",b"\\x04\\x00\\x00\\x00")
+                z.writestr("assets/MODEGY_PROTECTION/MODEGY_POLICY.dat",b"nonce-and-gcm-ciphertext")
+            s.apk_check(f,output=True)
+
+    def test_modegy_partial_bundle_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            f=Path(d)/"invalid.apk"
+            with zipfile.ZipFile(f,"w") as z:
+                z.writestr("AndroidManifest.xml",b"manifest")
+                z.writestr("assets/MODEGY_PROTECTION/MODEGY_DATA.zip",b"PDX1-ciphertext")
+                z.writestr("assets/MODEGY_PROTECTION/MODEGY_CORE.vmp",b"\\x04\\x00\\x00\\x00")
+            with self.assertRaisesRegex(ValueError,"XOP_OUTPUT_NOT_PROTECTED"):
+                s.apk_check(f,output=True)
     def test_bad_entry(self):
         with tempfile.TemporaryDirectory() as d:
             f=Path(d)/"test.apk"
