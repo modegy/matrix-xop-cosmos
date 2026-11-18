@@ -439,8 +439,8 @@ def patch_runtime_identity_and_diagnostics(root: Path) -> None:
     """Synchronize decoy generation with the native loader; strip release details."""
     packer = root / "packer/src/main/java/com/yqsh/protector/packer/JunkCodeGenerator.java"
     payload = packer.read_text(encoding="utf-8")
-    old = '"com/yqsh/protector/junkcode/JunkClass"'
-    new = '"com/modegypro/protection/decoy/T7mA2X"'
+    old = 'BASE_CLASS_NAME = "com/yqsh/protector/junkcode/JunkClass"'
+    new = 'BASE_CLASS_NAME = "com/modegypro/protection/decoy/T7mA2X"'
     if payload.count(old) != 1:
         raise RuntimeError("Decoy generator upstream drift")
     packer.write_text(payload.replace(old, new), encoding="utf-8")
