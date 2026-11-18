@@ -64,7 +64,7 @@ def parse_options(encoded):
             reject("XOP_OPTIONS_INVALID")
     for field in ("trueVmpPrefixes", "hollowPrefixes"):
         items = value.get(field, [])
-        if not isinstance(items, list) or len(items) > 64 or any(
+        if not isinstance(items, list) or len(items) > (256 if field == "trueVmpPrefixes" else 64) or any(
             not isinstance(x, str) or len(x) > 150 or not PREFIX.fullmatch(x) for x in items
         ):
             reject("XOP_SCOPE_INVALID")
