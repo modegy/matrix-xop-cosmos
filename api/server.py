@@ -122,7 +122,7 @@ def normalize_unsigned_zip(path):
         window = min(size, 22 + 65535 + 65535)
         stream.seek(size - window)
         tail = stream.read()
-        idx = tail.rfind(b"PK\\x05\\x06")
+        idx = tail.rfind(b"PK\x05\x06")
         while idx >= 0:
             if len(tail) - idx >= 22:
                 (sig, disk, cd_disk, on_disk, count, cd_size, cd_offset,
@@ -131,20 +131,20 @@ def normalize_unsigned_zip(path):
                 logical_end = eocd + 22 + comment_size
                 # Only a complete, single-volume, non-Zip64 central directory
                 # whose recorded end coincides with this EOCD is accepted.
-                if (sig == b"PK\\x05\\x06" and disk == cd_disk == 0
+                if (sig == b"PK\x05\x06" and disk == cd_disk == 0
                         and on_disk == count and 0 < count < 20001
                         and cd_offset != 0xffffffff and cd_size != 0xffffffff
                         and cd_offset + cd_size == eocd
                         and cd_offset + 4 <= size and logical_end <= size):
                     stream.seek(cd_offset)
-                    if stream.read(4) == b"PK\\x01\\x02":
+                    if stream.read(4) == b"PK\x01\x02":
                         trailing = size - logical_end
                         if trailing:
                             stream.truncate(logical_end)
                             stream.flush()
                             os.fsync(stream.fileno())
                         return trailing
-            idx = tail.rfind(b"PK\\x05\\x06", 0, idx)
+            idx = tail.rfind(b"PK\x05\x06", 0, idx)
     reject("XOP_OUTPUT_ZIP_EOCD_INVALID")
 
 def apk_check(path, output=False):
@@ -156,7 +156,7 @@ def apk_check(path, output=False):
             window = min(size, 22 + 65535 + 65535)
             stream.seek(size - window)
             tail = stream.read()
-        idx = tail.rfind(b"PK\\x05\\x06")
+        idx = tail.rfind(b"PK\x05\x06")
         if idx < 0 or idx + 22 > len(tail):
             reject("XOP_OUTPUT_ZIP_EOCD_INVALID")
         comment_size = struct.unpack_from("<H", tail, idx + 20)[0]
