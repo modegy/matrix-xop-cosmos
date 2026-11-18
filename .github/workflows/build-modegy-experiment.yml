@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/build-modegy-experiment.yml'
       - 'scripts/modegy_brand_patch.py'
+      - 'scripts/ModegyRootDexRedivision.java'
+      - 'scripts/ModegyRootDexRedivisionTest.java'
       - 'api/server.py'
       - 'tests/test_worker.py'
 permissions:
@@ -106,7 +108,7 @@ jobs:
       - name: Verify paired MODEGY cryptographic domains in Java unit tests
         working-directory: /tmp/XopProtector
         run: |
-          ./gradlew --no-daemon -Punimp.sdk.libs=/tmp/xop-unimp-absent :packer:test --tests 'com.yqsh.protector.packer.HkdfSha256Test' --tests 'com.yqsh.protector.packer.KeyLadderTest'
+          ./gradlew --no-daemon -Punimp.sdk.libs=/tmp/xop-unimp-absent :packer:test --tests 'com.yqsh.protector.packer.HkdfSha256Test' --tests 'com.yqsh.protector.packer.KeyLadderTest' --tests 'com.yqsh.protector.packer.ModegyRootDexRedivisionTest'
       - name: Verify experimental MODEGYPRO shell signatures
         run: |
           python3 - <<'PY'
