@@ -79,7 +79,7 @@ class ValidationTests(unittest.TestCase):
             clean = p.read_bytes()
             # Regression for the 4490 invalid bytes reported on MODEGY output.
             with p.open("ab") as out:
-                out.write(b"\\x00" * 1130 + b"PK\\x03\\x04" + b"Z" * 3356)
+                out.write(b"\x00" * 1130 + b"PK\x03\x04" + b"Z" * 3356)
             self.assertEqual(p.stat().st_size, len(clean) + 4490)
             with self.assertRaisesRegex(ValueError, "XOP_OUTPUT_ZIP_TRAILING"):
                 s.apk_check(p, output=True)
@@ -103,7 +103,7 @@ class ValidationTests(unittest.TestCase):
             with zipfile.ZipFile(p, "w") as z:
                 z.writestr("AndroidManifest.xml", b"manifest")
             data = bytearray(p.read_bytes())
-            eocd = data.rfind(b"PK\\x05\\x06")
+            eocd = data.rfind(b"PK\x05\x06")
             import struct
             struct.pack_into("<I", data, eocd + 16, 0xffffffff)
             p.write_bytes(data)
