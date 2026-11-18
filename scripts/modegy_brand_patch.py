@@ -239,6 +239,68 @@ def patch_cryptographic_identity(root: Path) -> None:
     print("MODEGY key slot markers and per-APK HKDF domains patched in both packer and native")
 
 
+
+def patch_modegy_dex_redivision(root: Path) -> None:
+    """Opt-in, strict one-root-DEX composition; encrypted VMP stays separate."""
+    def replace_one(path: str, old: str, new: str) -> None:
+        p = root / path
+        body = p.read_text(encoding="utf-8")
+        if body.count(old) != 1:
+            raise RuntimeError("Single-root-DEX source drift: " + path + ": " + old)
+        p.write_text(body.replace(old, new, 1), encoding="utf-8")
+
+    options = "packer/src/main/java/com/yqsh/protector/packer/ProtectOptions.java"
+    packer = "packer/src/main/java/com/yqsh/protector/packer/PackerMain.java"
+    replace_one(options,
+                "    public boolean protectSo = true;",
+                "    public boolean protectSo = true;\n"
+                "    /** Optional merge of root shell/plain/decoy DEX; fail on unsafe output. */\n"
+                "    public boolean modegySingleRootDex = false;")
+    replace_one(packer,
+                "    private boolean protectSo = true;",
+                "    private boolean protectSo = true;\n"
+                "    private boolean modegySingleRootDex = false;")
+    replace_one(packer,
+                "        protectSo = options.protectSo;",
+                "        protectSo = options.protectSo;\n"
+                "        modegySingleRootDex = options.modegySingleRootDex;")
+    replace_one(packer,
+                "        boolean protectSo = true;",
+                "        boolean protectSo = true;\n"
+                "        boolean modegySingleRootDexFlag = false;")
+    replace_one(packer,
+                '            } else if ("--no-protect-so".equals(args[i])) {\n'
+                '                protectSo = false;',
+                '            } else if ("--no-protect-so".equals(args[i])) {\n'
+                '                protectSo = false;\n'
+                '            } else if ("--modegy-single-root-dex".equals(args[i])) {\n'
+                '                modegySingleRootDexFlag = true;')
+    replace_one(packer,
+                "        options.protectSo = protectSo;",
+                "        options.protectSo = protectSo;\n"
+                "        options.modegySingleRootDex = modegySingleRootDexFlag;")
+    replace_one(packer,
+                "            embedJunkCodeDex(unpack, work.toFile());",
+                "            embedJunkCodeDex(unpack, work.toFile());\n"
+                "            if (modegySingleRootDex) {\n"
+                "                ModegyRootDexRedivision.merge(unpack);\n"
+                "            }")
+    for source, target in (
+        ("ModegyRootDexRedivision.java",
+         "packer/src/main/java/com/yqsh/protector/packer/ModegyRootDexRedivision.java"),
+        ("ModegyRootDexRedivisionTest.java",
+         "packer/src/test/java/com/yqsh/protector/packer/ModegyRootDexRedivisionTest.java"),
+    ):
+        p = Path(__file__).resolve().with_name(source)
+        if not p.is_file():
+            raise RuntimeError("MODEGY DEX merger source missing: " + str(p))
+        dst = root / target
+        if dst.exists():
+            raise RuntimeError("MODEGY DEX merger already in upstream: " + target)
+        dst.write_bytes(p.read_bytes())
+    print("Opt-in MODEGY root DEX redivision included; keeps VMP archive encrypted")
+
+
 def patch_tree(root: Path) -> None:
     if not (root / "packer/src/main/java/com/yqsh/protector/packer/PackerMain.java").is_file():
         raise RuntimeError("Not a verified XopProtector source tree")
@@ -365,6 +427,7 @@ def patch_tree(root: Path) -> None:
     dex.write_text(c.replace(old, replacement), encoding="utf-8")
 
     patch_cryptographic_identity(root)
+    patch_modegy_dex_redivision(root)
 
     # Fail the build if the app's JNI bridge or class-loader factory attempts
     # to call JNI_OnLoad in the shadowhook dependency instead of our runtime.
