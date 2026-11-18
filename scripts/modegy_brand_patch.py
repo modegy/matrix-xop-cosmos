@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 import sys
+import hashlib
+import hmac
 from pathlib import Path
 
 OLD_PKG_DOT = "com.yqsh.protector.shell"
@@ -104,6 +106,117 @@ def rewrite_cpp_literals(s: str) -> str:
             return m.group(0)
         return '"' + "".join("\\x%02x" % x for x in encoded(new)) + '"'
     return C_ENCODED.sub(fix, s)
+
+def patch_cryptographic_identity(root: Path) -> None:
+    """Change BOTH endpoints of slot markers and HKDF labels, plus self-test fixtures."""
+    def change(path: str, old: str, new: str):
+        file = root / path
+        src = file.read_text(encoding="utf-8")
+        if src.count(old) != 1:
+            raise RuntimeError("Upstream identity source changed: " + path + " " + old)
+        file.write_text(src.replace(old, new), encoding="utf-8")
+
+    java_key = "packer/src/main/java/com/yqsh/protector/packer/KeyLadder.java"
+    cpp_master = "native/src/main/cpp/crypto/key_ladder.cpp"
+    cpp_wrap = "native/src/main/cpp/crypto/section_decrypt.cpp"
+    change(java_key,
+           "'X', 'O', 'P', 'K', 'M', 'A', 'S', 'T', 'E', 'R'",
+           "'M', 'G', 'P', 'R', 'M', 'A', 'S', 'T', 'E', 'R'")
+    change(java_key,
+           "'X', 'O', 'P', 'K', 'W', 'R', 'A', 'P'",
+           "'M', 'G', 'P', 'R', 'W', 'R', 'A', 'P'")
+    change(cpp_master,
+           "0x58, 0x4f, 0x50, 0x4b, 0x4d, 0x41, 0x53, 0x54, 0x45, 0x52",
+           "0x4d, 0x47, 0x50, 0x52, 0x4d, 0x41, 0x53, 0x54, 0x45, 0x52")
+    change(cpp_wrap,
+           "0x58, 0x4f, 0x50, 0x4b, 0x57, 0x52, 0x41, 0x50",
+           "0x4d, 0x47, 0x50, 0x52, 0x57, 0x52, 0x41, 0x50")
+
+    for rel in (
+        java_key,
+        cpp_master,
+        "packer/src/test/java/com/yqsh/protector/packer/HkdfSha256Test.java",
+    ):
+        file = root / rel
+        old = file.read_text(encoding="utf-8")
+        new = old.replace("xop-", "mgp-")
+        if new == old:
+            raise RuntimeError("No HKDF domain-label replacement in " + rel)
+        file.write_text(new, encoding="utf-8")
+
+    for rel in (
+        "packer/src/main/java/com/yqsh/protector/packer/SoSectionEncryptor.java",
+        "packer/src/test/java/com/yqsh/protector/packer/KeyLadderTest.java",
+    ):
+        file = root / rel
+        old = file.read_text(encoding="utf-8")
+        new = old.replace("XOPKMASTER", "MGPRMASTER").replace("XOPKWRAP", "MGPRWRAP")
+        if new == old:
+            raise RuntimeError("No sentinel-label replacement in " + rel)
+        file.write_text(new, encoding="utf-8")
+
+    # Recompute SHA-256 HKDF fixture vectors; never silence the native self-test.
+    master, cert = bytes(range(32)), bytes(range(32, 64))
+    prk = hmac.new(cert, master, hashlib.sha256).digest()
+    pkg = "com.yqsh.protectordemo"
+    fixture = {}
+    for kind, size in (("dex", 16), ("insn", 16), ("so", 16),
+                       ("sowarm", 16), ("assets", 16), ("hmac", 32)):
+        info = ("mgp-" + kind + "-v1" + pkg).encode("ascii")
+        fixture[kind] = hmac.new(prk, info + b"\x01", hashlib.sha256).digest()[:size]
+
+    native = root / "native/src/main/cpp/crypto/sha256.cpp"
+    src = native.read_text(encoding="utf-8")
+    def replace_native_array(name: str, values: bytes):
+        nonlocal src
+        pattern = re.compile(
+            r"(static const uint8_t " + re.escape(name)
+            + r"\[\d*\] PROT_RODATA = \{\s*)(.*?)(\s*\};)", re.S)
+        def sub(m):
+            return (m.group(1) + "\n        "
+                    + ", ".join("0x%02x" % b for b in values)
+                    + "\n    " + m.group(3).lstrip())
+        src, cnt = pattern.subn(sub, src)
+        if cnt != 1:
+            raise RuntimeError("Native HKDF fixture changed: " + name)
+    for kind, name in (("dex", "kInfoDex"), ("so", "kInfoSo"),
+                       ("hmac", "kInfoHmac")):
+        replace_native_array(name, ("mgp-" + kind + "-v1" + pkg).encode("ascii"))
+    for kind, name in (("dex", "kDex16"), ("so", "kSo16"),
+                       ("hmac", "kHmac32")):
+        replace_native_array(name, fixture[kind])
+    if "xop-" in src:
+        src = src.replace("xop-", "mgp-")
+    native.write_text(src, encoding="utf-8")
+
+    # Update all existing Java golden tests with independently derived vectors.
+    known = {
+        "dex": "377ce3ca1ceb73aa0318643721a0a84a",
+        "insn": "38e9face9f71e908b85c1e564efb4a89",
+        "so": "5442b8e8c5ac63a13adfab1cb0385785",
+        "sowarm": "3e8114e0448f162d290263d25c39feef",
+        "assets": "86305d5b387e5431a8004e3c7bdfc645",
+        "hmac": "91766823d4ae9feaa9d3f8ab390a2e3d504fade7afee6b9ffb11ec7eae5de688"
+    }
+    for rel in (
+        "packer/src/test/java/com/yqsh/protector/packer/HkdfSha256Test.java",
+        "packer/src/test/java/com/yqsh/protector/packer/KeyLadderTest.java",
+    ):
+        file = root / rel
+        content = file.read_text(encoding="utf-8")
+        for kind, oldhex in known.items():
+            newhex = fixture[kind].hex()
+            if oldhex in content:
+                content = content.replace(oldhex, newhex)
+            elif kind == "hmac":
+                half = len(oldhex) // 2
+                oldsplit = '"' + oldhex[:half] + '"\n                        + "' + oldhex[half:] + '"'
+                newsplit = '"' + newhex[:half] + '"\n                        + "' + newhex[half:] + '"'
+                content = content.replace(oldsplit, newsplit)
+        file.write_text(content, encoding="utf-8")
+
+    print("MODEGY key slot markers and per-APK HKDF domains patched in both packer and native")
+
 
 def patch_tree(root: Path) -> None:
     if not (root / "packer/src/main/java/com/yqsh/protector/packer/PackerMain.java").is_file():
@@ -229,6 +342,8 @@ def patch_tree(root: Path) -> None:
     if old not in c:
         raise RuntimeError("Expected hardcoded DEX archive suffix check missing")
     dex.write_text(c.replace(old, replacement), encoding="utf-8")
+
+    patch_cryptographic_identity(root)
 
     # Reject any stale runtime path literals, but generic 'protector' namespaces
     # are source implementation details and are not automatically changed.
