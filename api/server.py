@@ -127,8 +127,27 @@ def apk_check(path, output=False):
             names.add(name)
         if "AndroidManifest.xml" not in names:
             reject("XOP_APK_NO_MANIFEST")
-        if output and not any(n.startswith("assets/protector/") for n in names):
-            reject("XOP_OUTPUT_NOT_PROTECTED")
+        if output:
+            # Both layouts are produced by the pinned build variants.
+            # Requiring a complete bundle prevents accepting a stray assets folder.
+            bundles = (
+                ("assets/protector/dexes.zip",
+                 "assets/protector/code.bin",
+                 "assets/protector/config.json"),
+                ("assets/MODEGY_PROTECTION/MODEGY_DATA.zip",
+                 "assets/MODEGY_PROTECTION/MODEGY_CORE.vmp",
+                 "assets/MODEGY_PROTECTION/MODEGY_POLICY.dat"),
+            )
+            matched = next((bundle for bundle in bundles
+                            if all(part in names for part in bundle)), None)
+            if matched is None:
+                reject("XOP_OUTPUT_NOT_PROTECTED")
+            archive, code, policy = matched
+            if z.getinfo(code).file_size < 4 or z.getinfo(policy).file_size == 0:
+                reject("XOP_OUTPUT_NOT_PROTECTED")
+            with z.open(archive) as stream:
+                if stream.read(4) != b"PDX1":
+                    reject("XOP_OUTPUT_NOT_PROTECTED")
         if z.testzip() is not None:
             reject("XOP_APK_CRC_INVALID")
 
