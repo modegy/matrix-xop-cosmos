@@ -125,6 +125,18 @@ def patch_tree(root: Path) -> None:
                 p.write_text(new, encoding="utf-8")
                 touched.append(p.relative_to(root).as_posix())
 
+    # bytehook links the upstream shadowhook dependency and also checks its
+    # basename at runtime. Keep that string synchronized with the ELF rename
+    # performed after exportShellFiles by the experimental workflow.
+    bh_path = root / "native/src/main/cpp/external/bhook/bytehook/src/main/cpp/bh_const.h"
+    bh = bh_path.read_text(encoding="utf-8")
+    old_shadow = '#define BH_CONST_BASENAME_SHADOWHOOK         "libshadowhook.so"'
+    if bh.count(old_shadow) != 1:
+        raise RuntimeError("Upstream bytehook dependency basename changed")
+    bh_path.write_text(bh.replace(old_shadow,
+        '#define BH_CONST_BASENAME_SHADOWHOOK         "libMODEGY_PROTECTION.so"'),
+        encoding="utf-8")
+
     # Build libMODEGYPRO.so directly from CMake, retaining exported entry points.
     cm = root / "native/src/main/cpp/CMakeLists.txt"
     source = cm.read_text(encoding="utf-8")
@@ -236,7 +248,7 @@ def patch_tree(root: Path) -> None:
     print("Code payload: assets/MODEGY_PROTECTION/MODEGY_CORE.vmp")
     print("Diagnostic report: excluded from packaged APK")
     print("Policy encrypted using per-APK AES-128-GCM; native also verifies original HMAC.")
-    print("External libshadowhook.so is still unmodified pending ELF ABI tests.")
+    print("Shadowhook rename requires ELF SONAME/NEEDED patch and ABI checks after build.")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
