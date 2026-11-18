@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/build-modegy-experiment.yml'
       - 'scripts/modegy_brand_patch.py'
+      - 'api/server.py'
+      - 'tests/test_worker.py'
 permissions:
   contents: read
   packages: write
