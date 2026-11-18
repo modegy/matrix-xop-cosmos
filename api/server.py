@@ -53,13 +53,13 @@ def parse_options(encoded):
         reject("XOP_OPTIONS_INVALID")
     allowed = {"profile", "protectSo", "modegySingleRootDex", "encryptAssets", "enableResProtect",
                "trueVmpPrefixes", "hollowPrefixes", "soMode", "soAbi",
-               "soExclude", "riskFlags", "raspAction", "reportEnabled", "certSha256"}
+               "soExclude", "riskFlags", "raspAction", "reportEnabled", "certSha256", "detectProxy"}
     if set(value) - allowed:
         reject("XOP_OPTIONS_UNKNOWN")
     if value.get("profile", "balanced") not in ("balanced", "perf", "industry", "aggressive", "max"):
         reject("XOP_PROFILE_INVALID")
     value.setdefault("profile", "balanced")
-    for field in ("protectSo", "modegySingleRootDex", "encryptAssets", "enableResProtect", "reportEnabled"):
+    for field in ("protectSo", "modegySingleRootDex", "encryptAssets", "enableResProtect", "reportEnabled", "detectProxy"):
         if field in value and type(value[field]) is not bool:
             reject("XOP_OPTIONS_INVALID")
     for field in ("trueVmpPrefixes", "hollowPrefixes"):
@@ -111,6 +111,8 @@ def cli_args(options, src, dst, tmp):
             cmd.extend((flag, str(options[key])))
     if "reportEnabled" in options:
         cmd.extend(("--report-enabled", "1" if options["reportEnabled"] else "0"))
+    if options.get("detectProxy", False):
+        cmd.append("--detect-proxy")
     if "certSha256" in options:
         cmd.extend(("--cert-sha256", options["certSha256"]))
     return cmd
