@@ -53,7 +53,7 @@ def parse_options(encoded):
         reject("XOP_OPTIONS_INVALID")
     allowed = {"profile", "protectSo", "modegySingleRootDex", "encryptAssets", "enableResProtect",
                "trueVmpPrefixes", "hollowPrefixes", "soMode", "soAbi",
-               "soExclude", "riskFlags", "raspAction", "reportEnabled"}
+               "soExclude", "riskFlags", "raspAction", "reportEnabled", "certSha256"}
     if set(value) - allowed:
         reject("XOP_OPTIONS_UNKNOWN")
     if value.get("profile", "balanced") not in ("balanced", "perf", "industry", "aggressive", "max"):
@@ -82,6 +82,10 @@ def parse_options(encoded):
     for name, limit in (("riskFlags", 2147483647), ("raspAction", 2)):
         if name in value and (type(value[name]) is not int or not 0 <= value[name] <= limit):
             reject("XOP_OPTIONS_INVALID")
+    if "certSha256" in value:
+        cert = value["certSha256"]
+        if not isinstance(cert, str) or not re.fullmatch(r"[0-9a-f]{64}", cert):
+            reject("XOP_CERT_SHA256_INVALID")
     return value
 
 def cli_args(options, src, dst, tmp):
@@ -107,6 +111,8 @@ def cli_args(options, src, dst, tmp):
             cmd.extend((flag, str(options[key])))
     if "reportEnabled" in options:
         cmd.extend(("--report-enabled", "1" if options["reportEnabled"] else "0"))
+    if "certSha256" in options:
+        cmd.extend(("--cert-sha256", options["certSha256"]))
     return cmd
 
 def normalize_unsigned_zip(path):
