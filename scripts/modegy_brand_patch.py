@@ -241,6 +241,40 @@ def patch_cryptographic_identity(root: Path) -> None:
 
 
 
+
+def patch_strict_selected_vmp(root: Path) -> None:
+    """Explicitly requested VMP must protect at least one method per scope."""
+    p = root / "packer/src/main/java/com/yqsh/protector/packer/PackerMain.java"
+    s = p.read_text(encoding="utf-8")
+    def ch(old: str, new: str) -> None:
+        nonlocal s
+        if s.count(old) != 1:
+            raise RuntimeError("Explicit VMP source drift " + old[:100])
+        s = s.replace(old, new, 1)
+    ch("    private final List<String> trueVmpPrefixes = new ArrayList<>();",
+       "    private final List<String> trueVmpPrefixes = new ArrayList<>();\n"
+       "    private final Set<String> admittedExplicitVmp = new HashSet<>();")
+    ch("            pvm2Admission.reset();",
+       "            pvm2Admission.reset();\n"
+       "            admittedExplicitVmp.clear();")
+    ch('            System.out.println(pvm2Admission.admissionLine());',
+       '            if (!admittedExplicitVmp.containsAll(trueVmpPrefixes)) {\n'
+       '                Set<String> unsupported = new LinkedHashSet<>(trueVmpPrefixes);\n'
+       '                unsupported.removeAll(admittedExplicitVmp);\n'
+       '                throw new IOException("MODEGY_SELECTED_VMP_NOT_APPLIED: " + unsupported);\n'
+       '            }\n'
+       '            System.out.println(pvm2Admission.admissionLine());')
+    ch('            pvm2Admission.noteSuccess();',
+       '            pvm2Admission.noteSuccess();\n'
+       '            for (String requested : trueVmpPrefixes) {\n'
+       '                if (typeDescriptor.startsWith(requested)) {\n'
+       '                    admittedExplicitVmp.add(requested);\n'
+       '                }\n'
+       '            }')
+    p.write_text(s, encoding="utf-8")
+    print("Explicit True-VMP scope admission fails closed when no selected method was protected")
+
+
 def patch_selected_runtime_rasp(root: Path) -> None:
     """Fix one-shot checks running before the authenticated runtime policy loads."""
     def change(path: str, old: str, new: str) -> None:
@@ -525,6 +559,7 @@ def patch_tree(root: Path) -> None:
     patch_cryptographic_identity(root)
     patch_modegy_dex_redivision(root)
     patch_selected_runtime_rasp(root)
+    patch_strict_selected_vmp(root)
 
     # Fail the build if the app's JNI bridge or class-loader factory attempts
     # to call JNI_OnLoad in the shadowhook dependency instead of our runtime.
