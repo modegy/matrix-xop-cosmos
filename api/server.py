@@ -9,6 +9,7 @@ import queue
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import threading
 import time
@@ -107,7 +108,60 @@ def cli_args(options, src, dst, tmp):
         cmd.extend(("--report-enabled", "1" if options["reportEnabled"] else "0"))
     return cmd
 
+def normalize_unsigned_zip(path):
+    """Trim only unreferenced bytes after a structurally verified ZIP EOCD.
+
+    The packer produces an UNSIGNED APK; stripping its trailing data before
+    external signing is safe only after validating the central-directory bounds.
+    Do not invoke on already signed APKs or user-supplied input files.
+    """
+    with path.open("r+b") as stream:
+        size = stream.seek(0, os.SEEK_END)
+        # EOCD can have up to 65535 bytes of comment. Permit a limited
+        # trailing-data window; oversized/corrupt output fails closed.
+        window = min(size, 22 + 65535 + 65535)
+        stream.seek(size - window)
+        tail = stream.read()
+        idx = tail.rfind(b"PK\\x05\\x06")
+        while idx >= 0:
+            if len(tail) - idx >= 22:
+                (sig, disk, cd_disk, on_disk, count, cd_size, cd_offset,
+                 comment_size) = struct.unpack_from("<4sHHHHIIH", tail, idx)
+                eocd = size - window + idx
+                logical_end = eocd + 22 + comment_size
+                # Only a complete, single-volume, non-Zip64 central directory
+                # whose recorded end coincides with this EOCD is accepted.
+                if (sig == b"PK\\x05\\x06" and disk == cd_disk == 0
+                        and on_disk == count and 0 < count < 20001
+                        and cd_offset != 0xffffffff and cd_size != 0xffffffff
+                        and cd_offset + cd_size == eocd
+                        and cd_offset + 4 <= size and logical_end <= size):
+                    stream.seek(cd_offset)
+                    if stream.read(4) == b"PK\\x01\\x02":
+                        trailing = size - logical_end
+                        if trailing:
+                            stream.truncate(logical_end)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        return trailing
+            idx = tail.rfind(b"PK\\x05\\x06", 0, idx)
+    reject("XOP_OUTPUT_ZIP_EOCD_INVALID")
+
 def apk_check(path, output=False):
+    if output:
+        # This must be a strict Android-installable ZIP end, not merely a
+        # Python-readable archive with ignored bytes after its EOCD.
+        with path.open("rb") as stream:
+            size = stream.seek(0, os.SEEK_END)
+            window = min(size, 22 + 65535 + 65535)
+            stream.seek(size - window)
+            tail = stream.read()
+        idx = tail.rfind(b"PK\\x05\\x06")
+        if idx < 0 or idx + 22 > len(tail):
+            reject("XOP_OUTPUT_ZIP_EOCD_INVALID")
+        comment_size = struct.unpack_from("<H", tail, idx + 20)[0]
+        if size - window + idx + 22 + comment_size != size:
+            reject("XOP_OUTPUT_ZIP_TRAILING")
     if not zipfile.is_zipfile(path):
         reject("XOP_APK_NOT_ZIP")
     with zipfile.ZipFile(path) as z:
@@ -187,6 +241,9 @@ def process_one(job_id):
             reject("XOP_PACKER_EXIT_NONZERO")
         if not output.is_file() or not 1024 <= output.stat().st_size <= MAX_OUT:
             reject("XOP_OUTPUT_SIZE_INVALID")
+        # Normalize only the worker-generated UNSIGNED APK, before hashing
+        # or handing it to an external signer. Input APKs are never modified.
+        normalize_unsigned_zip(output)
         apk_check(output, output=True)
         digest = hashlib.sha256()
         with output.open("rb") as f:
