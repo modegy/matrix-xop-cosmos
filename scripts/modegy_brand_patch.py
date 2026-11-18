@@ -43,6 +43,11 @@ EXTENSIONS = {".java", ".cpp", ".c", ".h", ".hpp", ".kt"}
 ROLL_KEY, ROLL_PRIME = 0x5A, 0x1B
 
 def renamed(s: str) -> str:
+    # MUST run before the generic quoted "protector" asset-dir rewrite.
+    # Otherwise System.loadLibrary("protector") incorrectly loads the renamed
+    # shadowhook dependency (libMODEGY_PROTECTION.so), whose JNI_OnLoad fails.
+    s = s.replace('System.loadLibrary("protector")',
+                  'System.loadLibrary("MODEGYPRO")')
     s = s.replace(OLD_PKG_DOT, NEW_PKG_DOT).replace(OLD_PKG_PATH, NEW_PKG_PATH)
     s = s.replace("com.yqsh.protector.junkcode", "com.modegypro.protection.decoy")
     s = s.replace("com/yqsh/protector/junkcode", "com/modegypro/protection/decoy")
@@ -62,8 +67,6 @@ def renamed(s: str) -> str:
     s = s.replace("libprotector.so", "libMODEGYPRO.so")
     s = s.replace("libprotector", "libMODEGYPRO")
     s = s.replace("[XOP-SO]", "[MODEGY-SO]")
-    s = s.replace('System.loadLibrary("protector")',
-                  'System.loadLibrary("MODEGYPRO")')
     return s
 
 def decoded(raw: bytes) -> str | None:
@@ -348,6 +351,19 @@ def patch_tree(root: Path) -> None:
     dex.write_text(c.replace(old, replacement), encoding="utf-8")
 
     patch_cryptographic_identity(root)
+
+    # Fail the build if the app's JNI bridge or class-loader factory attempts
+    # to call JNI_OnLoad in the shadowhook dependency instead of our runtime.
+    for rel in ("ModegyNativeBridge.java", "ModegyFactory.java"):
+        java = (target_dir / rel).read_text(encoding="utf-8")
+        if 'System.loadLibrary("MODEGYPRO")' not in java:
+            raise RuntimeError("Wrong JNI runtime library in " + rel)
+        if 'System.loadLibrary("MODEGY_PROTECTION")' in java:
+            raise RuntimeError("Accidental shadowhook JNI_OnLoad in " + rel)
+    for java_file in target_dir.glob("*.java"):
+        if 'System.loadLibrary("MODEGY_PROTECTION")' in java_file.read_text(encoding="utf-8"):
+            raise RuntimeError("Unexpected explicit shadowhook load in " + java_file.name)
+    print("JNI loader verified: System.loadLibrary(MODEGYPRO)")
 
     # Assert the packer and Android runtime use the same encrypted-assets namespace.
     # This catches the silent bug where the APK carries assets/protector/aenc/*.
