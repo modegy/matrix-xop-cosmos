@@ -67,6 +67,49 @@ class ValidationTests(unittest.TestCase):
                 z.writestr("assets/MODEGY_PROTECTION/MODEGY_CORE.vmp",bytes((4, 0, 0, 0)))
             with self.assertRaisesRegex(ValueError,"XOP_OUTPUT_NOT_PROTECTED"):
                 s.apk_check(f,output=True)
+    def test_unsigned_zip_trailing_removed_before_signing(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "unsigned.apk"
+            with zipfile.ZipFile(p, "w") as z:
+                z.writestr("AndroidManifest.xml", b"manifest")
+                z.writestr("classes.dex", b"dex-content")
+                z.writestr("assets/MODEGY_PROTECTION/MODEGY_DATA.zip", b"PDX1" + b"payload")
+                z.writestr("assets/MODEGY_PROTECTION/MODEGY_CORE.vmp", bytes((4, 0, 0, 0)))
+                z.writestr("assets/MODEGY_PROTECTION/MODEGY_POLICY.dat", b"encrypted-policy")
+            clean = p.read_bytes()
+            # Regression for the 4490 invalid bytes reported on MODEGY output.
+            with p.open("ab") as out:
+                out.write(b"\\x00" * 1130 + b"PK\\x03\\x04" + b"Z" * 3356)
+            self.assertEqual(p.stat().st_size, len(clean) + 4490)
+            with self.assertRaisesRegex(ValueError, "XOP_OUTPUT_ZIP_TRAILING"):
+                s.apk_check(p, output=True)
+            self.assertEqual(s.normalize_unsigned_zip(p), 4490)
+            self.assertEqual(p.read_bytes(), clean)
+            s.apk_check(p, output=True)
+            self.assertEqual(s.normalize_unsigned_zip(p), 0)
+
+    def test_zip_comment_is_not_trailing_data(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "comment.apk"
+            with zipfile.ZipFile(p, "w") as z:
+                z.writestr("AndroidManifest.xml", b"manifest")
+                z.comment = b"normal-zip-comment"
+            self.assertEqual(s.normalize_unsigned_zip(p), 0)
+            s.apk_check(p)
+
+    def test_unsigned_zip_invalid_central_directory_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "corrupt.apk"
+            with zipfile.ZipFile(p, "w") as z:
+                z.writestr("AndroidManifest.xml", b"manifest")
+            data = bytearray(p.read_bytes())
+            eocd = data.rfind(b"PK\\x05\\x06")
+            import struct
+            struct.pack_into("<I", data, eocd + 16, 0xffffffff)
+            p.write_bytes(data)
+            with self.assertRaisesRegex(ValueError, "XOP_OUTPUT_ZIP_EOCD_INVALID"):
+                s.normalize_unsigned_zip(p)
+
     def test_bad_entry(self):
         with tempfile.TemporaryDirectory() as d:
             f=Path(d)/"test.apk"
