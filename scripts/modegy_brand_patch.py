@@ -240,6 +240,102 @@ def patch_cryptographic_identity(root: Path) -> None:
 
 
 
+
+def patch_selected_runtime_rasp(root: Path) -> None:
+    """Fix one-shot checks running before the authenticated runtime policy loads."""
+    def change(path: str, old: str, new: str) -> None:
+        p = root / path
+        body = p.read_text(encoding="utf-8")
+        if body.count(old) != 1:
+            raise RuntimeError("MODEGY RASP upstream drift: " + path + " " + old[:90])
+        p.write_text(body.replace(old, new, 1), encoding="utf-8")
+
+    risk = "native/src/main/cpp/risk/risk.cpp"
+    header = "native/src/main/cpp/risk/risk.h"
+    engine = "native/src/main/cpp/runtime/engine.cpp"
+
+    # init_protector() starts this thread in JNI_OnLoad, when risk_flags is
+    # still 50 (Root/Emulator/CRC disabled). The original one-shot branch
+    # permanently consumed Root/Emulator checks before config.json was parsed.
+    # Do not delay the early continuous Frida/anti-debug checks.
+    change(risk,
+           "        if (!ran_one_shot) {\n            ran_one_shot = true;",
+           "        if (!ran_one_shot && "
+           "runtime_state().inited.load(std::memory_order_acquire)) {\n"
+           "            ran_one_shot = true;")
+
+    # Process-local LSPosed native bridge indicators, in addition to the
+    # existing xposed/lsposed/edxposed names. This deliberately does NOT claim
+    # to detect a manager installed but not injected into the target process.
+    lsplant = "".join("\\x%02x" % b for b in encoded("lsplant"))
+    liblspd = "".join("\\x%02x" % b for b in encoded("liblspd"))
+    marker = '        if (strstr(line, OBSC_DECODE("\\x22\\x31\\x03\\x78\\x53\\xb9")) || // xposed'
+    extra = ('        if (strstr(line, OBSC_DECODE("' + lsplant + '")) || // lsplant\n'
+             '            strstr(line, OBSC_DECODE("' + liblspd + '")) || // liblspd\n'
+             '            strstr(line, OBSC_DECODE("\\x22\\x31\\x03\\x78\\x53\\xb9")) || // xposed')
+    change(risk, marker, extra)
+
+    # Detect visible executable su entries from the process PATH and euid=0.
+    # No shell is executed and no permissions are requested.
+    root_start = "static bool root_binaries_found() {\n"
+    root_check = r'''static bool root_binaries_found() {
+    if (geteuid() == 0) return true;
+    const char* path_env = getenv("PATH");
+    while (path_env != nullptr && *path_env != '\0') {
+        const char* end = strchr(path_env, ':');
+        const size_t len = end != nullptr
+                ? static_cast<size_t>(end - path_env) : strlen(path_env);
+        if (len > 1 && len < PATH_MAX - 4 && path_env[0] == '/') {
+            char path[PATH_MAX];
+            memcpy(path, path_env, len);
+            memcpy(path + len, "/su", 4);
+            if (access(path, X_OK) == 0) return true;
+        }
+        if (end == nullptr) break;
+        path_env = end + 1;
+    }
+'''
+    change(risk, root_start, root_check)
+
+    # A real JNI class check rather than the old comment pretending one
+    # existed. The protected app's current native call provides JNIEnv.
+    # Absence is normal; clear only our own ClassNotFound exception.
+    change(header, "#include <cstdint>\n", "#include <cstdint>\n#include <jni.h>\n")
+    change(header,
+           "void scan_hooks_and_frida_now();",
+           "void scan_hooks_and_frida_now();\n"
+           "/** Process-visible XposedBridge class probe after verified config. */\n"
+           "void scan_xposed_java_now(JNIEnv* env);")
+    hook = "static void detect_xposed() {\n"
+    probe = r'''void scan_xposed_java_now(JNIEnv* env) {
+    if (env == nullptr) return;
+    int flags = runtime_state().config.risk_flags.load(std::memory_order_acquire);
+    if ((flags & FLAG_DISABLE_XPOSED_DETECT) != 0) return;
+    jclass bridge = env->FindClass("de/robv/android/xposed/XposedBridge");
+    if (bridge != nullptr) {
+        env->DeleteLocalRef(bridge);
+        CRASH_SEGV("xposed_bridge_class");
+        return;
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
+static void detect_xposed() {
+'''
+    change(risk, hook, probe)
+
+    sign_anchor = ('    if (!hex_equals_ci(cert_hex, state.config.app_sign_sha256)) {\n'
+                   '        PLOGE("config cert mismatch");\n'
+                   '        protector::risk::crash_abort();\n'
+                   '        return;\n'
+                   '    }\n')
+    change(engine, sign_anchor,
+           sign_anchor + '\n'
+           '    // Selected Xposed/LSPosed check, with an app-native JNI environment.\n'
+           '    protector::risk::scan_xposed_java_now(env);\n')
+    print("MODEGY RASP checks: policy-gated one-shot, visible root and Xposed class probes")
+
+
 def patch_modegy_dex_redivision(root: Path) -> None:
     """Opt-in, strict one-root-DEX composition; encrypted VMP stays separate."""
     def replace_one(path: str, old: str, new: str) -> None:
@@ -428,6 +524,7 @@ def patch_tree(root: Path) -> None:
 
     patch_cryptographic_identity(root)
     patch_modegy_dex_redivision(root)
+    patch_selected_runtime_rasp(root)
 
     # Fail the build if the app's JNI bridge or class-loader factory attempts
     # to call JNI_OnLoad in the shadowhook dependency instead of our runtime.
