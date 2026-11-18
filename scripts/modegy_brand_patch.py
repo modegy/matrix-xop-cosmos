@@ -439,11 +439,11 @@ def patch_runtime_identity_and_diagnostics(root: Path) -> None:
     """Synchronize decoy generation with the native loader; strip release details."""
     packer = root / "packer/src/main/java/com/yqsh/protector/packer/JunkCodeGenerator.java"
     payload = packer.read_text(encoding="utf-8")
-    old = 'BASE_CLASS_NAME = "com/yqsh/protector/junkcode/JunkClass"'
-    new = 'BASE_CLASS_NAME = "com/modegypro/protection/decoy/T7mA2X"'
-    if payload.count(old) != 1:
-        raise RuntimeError("Decoy generator upstream drift")
-    packer.write_text(payload.replace(old, new), encoding="utf-8")
+    # patch_tree already rebrands packer sources. Verify both endpoints
+    # rather than applying the rename for a second time.
+    marker = 'BASE_CLASS_NAME = "com/modegypro/protection/decoy/T7mA2X"'
+    if payload.count(marker) != 1:
+        raise RuntimeError("Decoy generator/runtime rebrand mismatch")
     engine = root / "native/src/main/cpp/runtime/engine.cpp"
     current = engine.read_text(encoding="utf-8")
     if current.count('"com.modegypro.protection.decoy.T7mA2X"') != 1:
