@@ -24,6 +24,18 @@ class ValidationTests(unittest.TestCase):
     def test_invalid_option(self):
         with self.assertRaisesRegex(ValueError, "XOP_OPTIONS_UNKNOWN"):
             s.parse_options(encoded({"shell":"rm -rf /"}))
+    def test_single_root_dex_is_opt_in(self):
+        base = {"profile": "balanced", "protectSo": True}
+        v = s.parse_options(encoded(base))
+        self.assertNotIn("--modegy-single-root-dex",
+                         s.cli_args(v, Path("a.apk"), Path("b.apk"), Path("/tmp")))
+        v = s.parse_options(encoded({**base, "modegySingleRootDex": True}))
+        args = s.cli_args(v, Path("a.apk"), Path("b.apk"), Path("/tmp"))
+        self.assertIn("--modegy-single-root-dex", args)
+        self.assertIn("--protect-so", args)
+        with self.assertRaisesRegex(ValueError, "XOP_OPTIONS_INVALID"):
+            s.parse_options(encoded({**base, "modegySingleRootDex": "yes"}))
+
     def test_so_name(self):
         s.parse_options(encoded({"soExclude":["libdemo.so"]}))
         with self.assertRaisesRegex(ValueError, "XOP_SO_EXCLUDE_INVALID"):
