@@ -36,6 +36,9 @@ CLASSES = {
     "VmBridge": "ModegyVM",
     "DexMerger": "ModegyDexLoader",
     "StrEnc": "ModegyCodec",
+    "ApplicationReplacer": "Qm7A9R",
+    "DexScanCompat": "Jv8A2C",
+    "JunkClass": "T7mA2X",
     "ProtectorAssets": "ModegyAssets",
     "NativeLibDirRedirect": "ModegyLibRedirect",
 }
@@ -431,6 +434,77 @@ def patch_modegy_dex_redivision(root: Path) -> None:
     print("Opt-in MODEGY root DEX redivision included; keeps VMP archive encrypted")
 
 
+
+def patch_runtime_identity_and_diagnostics(root: Path) -> None:
+    """Synchronize decoy generation with the native loader; strip release details."""
+    packer = root / "packer/src/main/java/com/yqsh/protector/packer/JunkCodeGenerator.java"
+    payload = packer.read_text(encoding="utf-8")
+    old = '"com/yqsh/protector/junkcode/JunkClass"'
+    new = '"com/modegypro/protection/decoy/T7mA2X"'
+    if payload.count(old) != 1:
+        raise RuntimeError("Decoy generator upstream drift")
+    packer.write_text(payload.replace(old, new), encoding="utf-8")
+    engine = root / "native/src/main/cpp/runtime/engine.cpp"
+    current = engine.read_text(encoding="utf-8")
+    if current.count('"com.modegypro.protection.decoy.T7mA2X"') != 1:
+        raise RuntimeError("Native decoy resolver out of sync with generator")
+
+    shell = root / "native/src/main/java/com/modegypro/protection/shell"
+    for renamed_java in ("Qm7A9R.java", "Jv8A2C.java"):
+        p = shell / renamed_java
+        contents = p.read_text(encoding="utf-8")
+        # Logging shell class names, runtime exceptions and paths makes
+        # reverse-engineering easier and can expose exception contents.
+        # Strip only complete standalone log statements; keep exception handling.
+        pattern = re.compile(
+            r"(?m)^[ \t]*Log\.(?:d|e|i|v|w)\(TAG,[\s\S]*?\);[ \t]*(?:\n|$)")
+        contents, count = pattern.subn("", contents)
+        if count < 5:
+            raise RuntimeError("Unexpected Java logging structure " + renamed_java)
+        contents = contents.replace("import android.util.Log;\n", "")
+        contents = re.sub(
+            r'(?m)^[ \t]*private static final String TAG = "protector\.[^"]+";[ \t]*\n',
+            "", contents)
+        if "Log." in contents or "protector.AppReplace" in contents or "protector.DexScan" in contents:
+            raise RuntimeError("Sensitive Java diagnostic remains: " + renamed_java)
+        p.write_text(contents, encoding="utf-8")
+
+    log_h = root / "native/src/main/cpp/common/log.h"
+    contents = log_h.read_text(encoding="utf-8")
+    old = ('// Keep PLOGE for crash forensics (only fires right before a crash).\n'
+           '#define PLOGE(...) __android_log_print(ANDROID_LOG_ERROR, PROTECTOR_LOG_TAG, __VA_ARGS__)')
+    if contents.count(old) != 1:
+        raise RuntimeError("Native release log contract changed")
+    log_h.write_text(contents.replace(old,
+             '// No human-readable failure reasons in release logcat.\n'
+             '#define PLOGE(...) ((void)0)'), encoding="utf-8")
+
+    # The original release risk path writes the specific detector name
+    # immediately before SIGILL / SIGSEGV.
+    risk = root / "native/src/main/cpp/risk/risk.cpp"
+    contents = risk.read_text(encoding="utf-8")
+    for line in (
+        '    __android_log_print(ANDROID_LOG_ERROR, "protector.risk", "sigill reason=%s", g_crash_reason);\n',
+        '    __android_log_print(ANDROID_LOG_ERROR, "protector.risk", "sigsegv reason=%s", g_crash_reason);\n',
+    ):
+        if contents.count(line) != 1:
+            raise RuntimeError("Native crash logging drift")
+        contents = contents.replace(line, "")
+    risk.write_text(contents, encoding="utf-8")
+
+    # Matrix policy sets reportEnabled=false. The original file writer ignored
+    # that flag and still wrote crash_reason.txt containing internal reasons.
+    report = root / "native/src/main/cpp/report/threat_report.cpp"
+    contents = report.read_text(encoding="utf-8")
+    needle = 'void write_crash_reason(const char* reason, const char* kind) {\n'
+    if contents.count(needle) != 1:
+        raise RuntimeError("Crash reason output code drift")
+    contents = contents.replace(needle,
+        needle + '    if (!g_enabled.load(std::memory_order_acquire)) return;\n')
+    report.write_text(contents, encoding="utf-8")
+    print("Decoy generation and runtime class synchronized; diagnostic release logs disabled")
+
+
 def patch_tree(root: Path) -> None:
     if not (root / "packer/src/main/java/com/yqsh/protector/packer/PackerMain.java").is_file():
         raise RuntimeError("Not a verified XopProtector source tree")
@@ -560,6 +634,7 @@ def patch_tree(root: Path) -> None:
     patch_modegy_dex_redivision(root)
     patch_selected_runtime_rasp(root)
     patch_strict_selected_vmp(root)
+    patch_runtime_identity_and_diagnostics(root)
 
     # Fail the build if the app's JNI bridge or class-loader factory attempts
     # to call JNI_OnLoad in the shadowhook dependency instead of our runtime.
