@@ -1,0 +1,110 @@
+name: Build isolated MODEGYPRO experiment
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-modegy-experiment.yml'
+      - 'scripts/modegy_brand_patch.py'
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out clean deployment project
+        uses: actions/checkout@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Test isolated Python worker
+        run: python3 -m unittest discover -s tests -v
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Install Android SDK and NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-34' 'build-tools;34.0.0' 'cmake;3.22.1' 'ndk;26.1.10909125'
+      - name: Clone verified official XopProtector revision
+        run: |
+          git clone https://github.com/xopJack/XopProtector.git /tmp/XopProtector
+          cd /tmp/XopProtector
+          git checkout --detach 347f20717e32d9d93d081d00c27d91ce75bd84be
+          test "$(git rev-parse HEAD)" = "347f20717e32d9d93d081d00c27d91ce75bd84be"
+      - name: Remove unsupported Windows-only fallback from temporary upstream checkout
+        working-directory: /tmp/XopProtector
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("settings.gradle.kts")
+          content = p.read_text()
+          target = '    file("E:/Android/SDK-Android@5.14-20260706/SDK/libs"),\n'
+          if content.count(target) != 1:
+              raise SystemExit("Upstream settings changed: inspect before modifying the build")
+          p.write_text(content.replace(target, "", 1))
+          assert target not in p.read_text()
+          print("Linux CI: removed invalid Windows UniMP fallback from temporary checkout")
+          PY
+      - name: Patch verified upstream in temporary checkout (experiment only)
+        run: |
+          python3 -m py_compile scripts/modegy_brand_patch.py
+          python3 scripts/modegy_brand_patch.py /tmp/XopProtector
+      - name: Build MODEGYPRO Java packer and native shell
+        working-directory: /tmp/XopProtector
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g"
+        run: |
+          chmod +x gradlew
+          # Upstream gradle.properties contains a Windows-only UniMP SDK path.
+          # Use an absent Linux path to disable that optional module without changing upstream sources.
+          ./gradlew --no-daemon -Punimp.sdk.libs=/tmp/xop-unimp-absent :packer:jar exportShellFiles
+          mkdir -p "$GITHUB_WORKSPACE/engine"
+          cp packer/build/libs/protector-packer-0.8.1.jar "$GITHUB_WORKSPACE/engine/packer.jar"
+          cp -a executable/shell-files "$GITHUB_WORKSPACE/engine/shell-files"
+          test -s "$GITHUB_WORKSPACE/engine/packer.jar"
+          test -s "$GITHUB_WORKSPACE/engine/shell-files/dex/classes.dex"
+          test -s "$GITHUB_WORKSPACE/engine/shell-files/libs/arm64-v8a/libMODEGYPRO.so"
+          test -s "$GITHUB_WORKSPACE/engine/shell-files/libs/armeabi-v7a/libMODEGYPRO.so"
+      - name: Verify experimental MODEGYPRO shell signatures
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('engine/shell-files')
+          dex=(p/'dex/classes.dex').read_bytes()
+          if b'com/modegypro/protection/shell/ModegyRuntime' not in dex:
+              raise SystemExit('Missing renamed runtime class in shell DEX')
+          for abi in ('arm64-v8a','armeabi-v7a'):
+              libs=p/'libs'/abi
+              assert (libs/'libMODEGYPRO.so').is_file()
+              assert not (libs/'libprotector.so').exists()
+          print('Verified experimental shell identity; release unchanged')
+          PY
+      - name: Verify Python worker syntax
+        run: python3 -m py_compile api/server.py
+      - name: Set image coordinates
+        id: image
+        run: |
+          echo "name=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/matrix-xop-worker" >> "$GITHUB_OUTPUT"
+      - name: Configure Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Sign into GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push immutable runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.image.outputs.name }}:modegy-exp-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/modegy/matrix-xop-cosmos
+            org.opencontainers.image.revision=347f20717e32d9d93d081d00c27d91ce75bd84be
+          provenance: true
