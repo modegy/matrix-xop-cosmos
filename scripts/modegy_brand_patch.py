@@ -51,6 +51,9 @@ def renamed(s: str) -> str:
         s = s.replace(old, new)
     for old, new in NAMES.items():
         s = s.replace(old, new)
+    # Encrypted business assets must share the same relative path in packer and runtime.
+    # The previous broad replacements skipped quoted "protector/aenc" (no terminal slash).
+    s = s.replace("protector/aenc", ASSET_DIR + "/aenc")
     s = s.replace("assets/protector", "assets/" + ASSET_DIR)
     s = s.replace("code_cache/protector", "code_cache/" + ASSET_DIR)
     s = s.replace("/protector/", "/" + ASSET_DIR + "/")
@@ -345,6 +348,18 @@ def patch_tree(root: Path) -> None:
     dex.write_text(c.replace(old, replacement), encoding="utf-8")
 
     patch_cryptographic_identity(root)
+
+    # Assert the packer and Android runtime use the same encrypted-assets namespace.
+    # This catches the silent bug where the APK carries assets/protector/aenc/*.
+    packer_assets = (root / "packer/src/main/java/com/yqsh/protector/packer/AssetsEncryptor.java").read_text(encoding="utf-8")
+    reader_assets = (root / "native/src/main/java/com/modegypro/protection/shell/ModegyAssets.java").read_text(encoding="utf-8")
+    if ('AENC_DIR = "' + ASSET_DIR + '/aenc"') not in packer_assets:
+        raise RuntimeError("Encrypted asset writer still uses wrong folder")
+    if ('AENC_PREFIX = "' + ASSET_DIR + '/aenc/"') not in reader_assets:
+        raise RuntimeError("Encrypted asset reader still uses wrong folder")
+    if 'protector/aenc' in packer_assets or 'protector/aenc' in reader_assets:
+        raise RuntimeError("Legacy protector/aenc path remains in asset writer or reader")
+    print("MODEGY encrypted asset reader/writer paths verified:", ASSET_DIR + "/aenc")
 
     # Reject any stale runtime path literals, but generic 'protector' namespaces
     # are source implementation details and are not automatically changed.
