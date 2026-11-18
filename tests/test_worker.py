@@ -59,6 +59,17 @@ class ValidationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "XOP_OPTIONS_INVALID"):
                     s.parse_options(encoded({"riskFlags": wrong}))
 
+    def test_vpn_monitoring_forwards_to_native_netguard(self):
+        base={"profile":"balanced","protectSo":True}
+        plain=s.cli_args(s.parse_options(encoded(base)),Path("a.apk"),Path("b.apk"),Path("/tmp"))
+        self.assertNotIn("--detect-proxy",plain)
+        enabled=s.cli_args(s.parse_options(encoded({**base,"detectProxy":True})),
+                           Path("a.apk"),Path("b.apk"),Path("/tmp"))
+        self.assertIn("--detect-proxy",enabled)
+        for bad in ("true",1,None):
+            with self.assertRaisesRegex(ValueError,"XOP_OPTIONS_INVALID"):
+                s.parse_options(encoded({"detectProxy":bad}))
+
     def test_so_name(self):
         s.parse_options(encoded({"soExclude":["libdemo.so"]}))
         with self.assertRaisesRegex(ValueError, "XOP_SO_EXCLUDE_INVALID"):
