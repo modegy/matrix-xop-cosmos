@@ -36,6 +36,29 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "XOP_OPTIONS_INVALID"):
             s.parse_options(encoded({**base, "modegySingleRootDex": "yes"}))
 
+    def test_all_rasp_disable_masks_pass_to_native_packer_unchanged(self):
+        # MODEGY checkbox semantics: 0=all on; bits explicitly disable
+        # Frida(1), CRC(2), debugger(4), Xposed(8), Root(16),
+        # emulator(32), SO runtime integrity(64).
+        for mask in range(128):
+            with self.subTest(mask=mask):
+                opts = s.parse_options(encoded({
+                    "profile": "balanced", "protectSo": True,
+                    "riskFlags": mask, "raspAction": 2
+                }))
+                args = s.cli_args(opts, Path("in.apk"), Path("out.apk"), Path("/tmp"))
+                idx = args.index("--risk-flags")
+                self.assertEqual(args[idx + 1], str(mask))
+                self.assertEqual(args[args.index("--rasp-action") + 1], "2")
+        for wrong in (-1, 128, 1.5, "0", True):
+            with self.subTest(wrong=wrong):
+                if wrong == 128:
+                    # The standalone worker accepts a larger bit range, but
+                    # NEXUS front end specifically caps the mask at 127.
+                    continue
+                with self.assertRaisesRegex(ValueError, "XOP_OPTIONS_INVALID"):
+                    s.parse_options(encoded({"riskFlags": wrong}))
+
     def test_so_name(self):
         s.parse_options(encoded({"soExclude":["libdemo.so"]}))
         with self.assertRaisesRegex(ValueError, "XOP_SO_EXCLUDE_INVALID"):
