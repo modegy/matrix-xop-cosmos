@@ -480,7 +480,7 @@ def patch_runtime_identity_and_diagnostics(root: Path) -> None:
     for p in shell.glob("*.java"):
         body = p.read_text(encoding="utf-8")
         for old_name, new_name in helper_names.items():
-            body = re.sub(r"\\b" + old_name + r"\\b", new_name, body)
+            body = re.sub(r"\b" + old_name + r"\b", new_name, body)
         p.write_text(body, encoding="utf-8")
 
     # The reattach return value is never consumed by the shell callers; keep
