@@ -55,6 +55,7 @@ def renamed(s: str) -> str:
     s = s.replace('"protector/"', '"' + ASSET_DIR + '/"')
     s = s.replace('"protector"', '"' + ASSET_DIR + '"')
     s = s.replace("libprotector.so", "libMODEGYPRO.so")
+    s = s.replace("libprotector", "libMODEGYPRO")
     s = s.replace('System.loadLibrary("protector")',
                   'System.loadLibrary("MODEGYPRO")')
     return s
@@ -82,7 +83,7 @@ def rewrite_java_arrays(s: str) -> str:
         old = decoded(bytes(values))
         if old is None:
             return m.group(0)
-        new = renamed(old)
+        new = ASSET_DIR if old == "protector" else renamed(old)
         if new == old:
             return m.group(0)
         body = ", ".join("(byte)0x%02x" % b if b >= 128 else "0x%02x" % b
@@ -98,7 +99,7 @@ def rewrite_cpp_literals(s: str) -> str:
         old = decoded(b)
         if old is None:
             return m.group(0)
-        new = renamed(old)
+        new = ASSET_DIR if old == "protector" else renamed(old)
         if new == old:
             return m.group(0)
         return '"' + "".join("\\x%02x" % x for x in encoded(new)) + '"'
@@ -166,8 +167,9 @@ def patch_tree(root: Path) -> None:
     dex = root / "native/src/main/cpp/dex/dex_file.cpp"
     c = dex.read_text(encoding="utf-8")
     old = 'container.size() >= 10 && container.compare(container.size() - 10, 10, "/MODEGY_DATA.zip")'
-    replacement = ('container.size() >= 15 && '
-                   'container.compare(container.size() - 15, 15, "/MODEGY_DATA.zip")')
+    suffix_len = len("/" + NAMES["dexes.zip"])
+    replacement = (f'container.size() >= {suffix_len} && '
+                   f'container.compare(container.size() - {suffix_len}, {suffix_len}, "/MODEGY_DATA.zip")')
     if old not in c:
         raise RuntimeError("Expected hardcoded DEX archive suffix check missing")
     dex.write_text(c.replace(old, replacement), encoding="utf-8")
