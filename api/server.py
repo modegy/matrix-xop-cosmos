@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 import zipfile
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -46,8 +47,22 @@ def parse_options(encoded):
     if len(encoded) > 8192:
         reject("XOP_OPTIONS_TOO_LARGE")
     try:
-        value = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
-    except (ValueError, UnicodeError):
+        compressed = encoded.startswith("z:")
+        source = encoded[2:] if compressed else encoded
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", source):
+            reject("XOP_OPTIONS_INVALID")
+        packed = base64.urlsafe_b64decode(source + "=" * (-len(source) % 4))
+        if compressed:
+            decoder = zlib.decompressobj(-zlib.MAX_WBITS)
+            raw = decoder.decompress(packed, 65537)
+            if len(raw) > 65536 or decoder.unconsumed_tail or not decoder.eof or decoder.unused_data:
+                reject("XOP_OPTIONS_INVALID")
+        else:
+            raw = packed
+        if len(raw) > 65536:
+            reject("XOP_OPTIONS_INVALID")
+        value = json.loads(raw)
+    except (ValueError, UnicodeError, zlib.error):
         reject("XOP_OPTIONS_INVALID")
     if not isinstance(value, dict):
         reject("XOP_OPTIONS_INVALID")
