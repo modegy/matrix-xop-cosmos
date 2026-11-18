@@ -51,7 +51,7 @@ def parse_options(encoded):
         reject("XOP_OPTIONS_INVALID")
     if not isinstance(value, dict):
         reject("XOP_OPTIONS_INVALID")
-    allowed = {"profile", "protectSo", "encryptAssets", "enableResProtect",
+    allowed = {"profile", "protectSo", "modegySingleRootDex", "encryptAssets", "enableResProtect",
                "trueVmpPrefixes", "hollowPrefixes", "soMode", "soAbi",
                "soExclude", "riskFlags", "raspAction", "reportEnabled"}
     if set(value) - allowed:
@@ -59,7 +59,7 @@ def parse_options(encoded):
     if value.get("profile", "balanced") not in ("balanced", "perf", "industry", "aggressive", "max"):
         reject("XOP_PROFILE_INVALID")
     value.setdefault("profile", "balanced")
-    for field in ("protectSo", "encryptAssets", "enableResProtect", "reportEnabled"):
+    for field in ("protectSo", "modegySingleRootDex", "encryptAssets", "enableResProtect", "reportEnabled"):
         if field in value and type(value[field]) is not bool:
             reject("XOP_OPTIONS_INVALID")
     for field in ("trueVmpPrefixes", "hollowPrefixes"):
@@ -90,7 +90,8 @@ def cli_args(options, src, dst, tmp):
            "--profile", options["profile"], "--json-progress",
            "--protect-so" if options.get("protectSo", True) else "--no-protect-so"]
     for key, flag in (("encryptAssets", "--encrypt-assets"),
-                      ("enableResProtect", "--enable-res-protect")):
+                      ("enableResProtect", "--enable-res-protect"),
+                      ("modegySingleRootDex", "--modegy-single-root-dex")):
         if options.get(key):
             cmd.append(flag)
     for key, flag in (("trueVmpPrefixes", "--true-vmp-prefix"), ("hollowPrefixes", "--hollow-prefix")):
