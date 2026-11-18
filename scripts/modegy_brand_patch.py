@@ -520,6 +520,64 @@ def patch_runtime_identity_and_diagnostics(root: Path) -> None:
         body = body.replace(value, "ModegyCodec.d(new byte[]{" + bytes_java + "})")
     app_helper.write_text(body, encoding="utf-8")
 
+    # Remove app-authored Log.* statements across every shell Java class.
+    # Run in the experimental source checkout only. Keep OS-level crash
+    # reporting untouched (that is not controllable by app logging).
+    def remove_standalone_android_logs(text: str) -> str:
+        start = re.compile(r'(?m)^[ \t]*Log\.(?:v|d|i|w|e)\(')
+        while True:
+            hit = start.search(text)
+            if hit is None:
+                break
+            idx = hit.end() - 1  # opening parenthesis
+            depth = 0
+            quoted = False
+            quote = ''
+            escaped = False
+            while idx < len(text):
+                ch = text[idx]
+                if quoted:
+                    if escaped:
+                        escaped = False
+                    elif ch == '\\':
+                        escaped = True
+                    elif ch == quote:
+                        quoted = False
+                elif ch in ('"', "'"):
+                    quoted = True
+                    quote = ch
+                elif ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                    if depth == 0:
+                        idx += 1
+                        break
+                idx += 1
+            if depth != 0:
+                raise RuntimeError("Unterminated Android log call")
+            while idx < len(text) and text[idx] in " \t":
+                idx += 1
+            if idx >= len(text) or text[idx] != ';':
+                raise RuntimeError("Android Log used as expression, inspect source")
+            idx += 1
+            if idx < len(text) and text[idx] == '\n':
+                idx += 1
+            text = text[:hit.start()] + text[idx:]
+        return text
+
+    for file in shell.glob("*.java"):
+        original = file.read_text(encoding="utf-8")
+        patched = remove_standalone_android_logs(original)
+        patched = patched.replace("import android.util.Log;\n", "")
+        patched = re.sub(r'(?m)^[ \t]*private static final String TAG = "protector\.[^"]+";[ \t]*\n',
+                         "", patched)
+        # Existing Name/Helper tags are absent from release classes.
+        if re.search(r'\bLog\.(?:d|e|i|v|w)\(', patched):
+            raise RuntimeError("Runtime Java log statement remains: " + file.name)
+        file.write_text(patched, encoding="utf-8")
+    print("No shell Java Log.v/d/i/w/e statements left in experimental runtime")
+
     log_h = root / "native/src/main/cpp/common/log.h"
     contents = log_h.read_text(encoding="utf-8")
     old = ('// Keep PLOGE for crash forensics (only fires right before a crash).\n'
