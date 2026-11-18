@@ -370,6 +370,28 @@ static void detect_xposed() {
            sign_anchor + '\n'
            '    // Selected Xposed/LSPosed check, with an app-native JNI environment.\n'
            '    protector::risk::scan_xposed_java_now(env);\n')
+
+    # Run the selected one-shot environment checks immediately after the
+    # authenticated config and signing certificate are checked, instead of
+    # waiting for the background risk thread's 2–5 second polling interval.
+    change(header,
+           "void scan_xposed_java_now(JNIEnv* env);",
+           "void scan_xposed_java_now(JNIEnv* env);\n"
+           "void scan_selected_environment_now();")
+    one_shot = ("// ── Background thread ──────────────────────────────────────────────")
+    eager = r'''void scan_selected_environment_now() {
+    const int flags = runtime_state().config.risk_flags.load(std::memory_order_acquire);
+    if ((flags & FLAG_DISABLE_XPOSED_DETECT) == 0) detect_xposed();
+    if ((flags & FLAG_DISABLE_ROOT_DETECT) == 0) detect_root();
+    if ((flags & FLAG_DISABLE_EMULATOR_DETECT) == 0) detect_emulator();
+}
+
+// ── Background thread ──────────────────────────────────────────────'''
+    change(risk, one_shot, eager)
+    change(engine,
+           '    protector::risk::scan_xposed_java_now(env);\n',
+           '    protector::risk::scan_xposed_java_now(env);\n'
+           '    protector::risk::scan_selected_environment_now();\n')
     print("MODEGY RASP checks: policy-gated one-shot, visible root and Xposed class probes")
 
 
