@@ -101,6 +101,10 @@ jobs:
                       raise SystemExit(f"ELF page alignment failed: {p} {aligns}")
                   print(f"{p}: PT_LOAD alignment {min(aligns)} bytes")
           PY
+      - name: Verify paired MODEGY cryptographic domains in Java unit tests
+        working-directory: /tmp/XopProtector
+        run: |
+          ./gradlew --no-daemon -Punimp.sdk.libs=/tmp/xop-unimp-absent :packer:test --tests 'com.yqsh.protector.packer.HkdfSha256Test' --tests 'com.yqsh.protector.packer.KeyLadderTest'
       - name: Verify experimental MODEGYPRO shell signatures
         run: |
           python3 - <<'PY'
