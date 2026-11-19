@@ -108,6 +108,16 @@ public final class ModegyRootDexRedivision {
         return index;
     }
 
+    private static void validateOriginalDexClassSet(File file, Set<String> global)
+            throws IOException {
+        try (BufferedInputStream in = new BufferedInputStream(new FileInputStream(file))) {
+            DexBackedDexFile dex = DexBackedDexFile.fromInputStream(Opcodes.getDefault(), in);
+            for (ClassDef c : dex.getClasses())
+                if (!global.add(c.getType()))
+                    throw new IOException("MODEGY_DEX_DUPLICATE_CLASS: " + c.getType());
+        }
+    }
+
     public static int merge(File apkRoot) throws IOException {
         if (apkRoot == null || !apkRoot.isDirectory())
             throw new IOException("MODEGY_DEX_ROOT_INVALID");
@@ -130,6 +140,7 @@ public final class ModegyRootDexRedivision {
         int copied = 0;
         List<ClassDef> pending = new ArrayList<>();
         Set<String> seenInGroup = new HashSet<>();
+        Set<String> seenOverall = new HashSet<>();
         long groupBytes = 0;
         try {
             for (File file : original) {
@@ -137,6 +148,7 @@ public final class ModegyRootDexRedivision {
                 // methods via DexPool causes excessive memory use and risks
                 // breaking obfuscated/Compose instructions.
                 if (file.length() > MAX_REWRITE_SOURCE_BYTES) {
+                    validateOriginalDexClassSet(file, seenOverall);
                     next = flush(pending, staged, next);
                     seenInGroup.clear(); groupBytes = 0;
                     Files.copy(file.toPath(), staged.resolve(name(next++)));
@@ -156,6 +168,7 @@ public final class ModegyRootDexRedivision {
                     }
                 }
                 if (fragile) {
+                    validateOriginalDexClassSet(file, seenOverall);
                     next = flush(pending, staged, next);
                     seenInGroup.clear(); groupBytes = 0;
                     Files.copy(file.toPath(), staged.resolve(name(next++)));
@@ -167,6 +180,8 @@ public final class ModegyRootDexRedivision {
                     seenInGroup.clear(); groupBytes = 0;
                 }
                 for (ClassDef c : dex.getClasses()) {
+                    if (!seenOverall.add(c.getType()))
+                        throw new IOException("MODEGY_DEX_DUPLICATE_CLASS: " + c.getType());
                     if (pending.size() >= MAX_GROUP_CLASSES ||
                             seenInGroup.contains(c.getType())) {
                         next = flush(pending, staged, next);
