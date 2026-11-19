@@ -22,6 +22,25 @@ def zipped(v):
     packed = compressor.compress(json.dumps(v).encode()) + compressor.flush()
     return "z:" + base64.urlsafe_b64encode(packed).decode().rstrip("=")
 
+class FailureClassificationTests(unittest.TestCase):
+    def test_large_dex_failure_codes_are_stable_and_private(self):
+        cases = {
+            "MODEGY_DEX_SINGLE_FILE_LIMIT_88: 65536": "XOP_DEX_REFERENCE_LIMIT",
+            "MODEGY_DEX_MERGE_UNSAFE_CLASS: Labc/;": "XOP_DEX_MERGE_UNSAFE",
+            "MODEGY_DEX_DUPLICATE_CLASS: Labc/;": "XOP_DEX_DUPLICATE_CLASS",
+            "MODEGY_SELECTED_VMP_NOT_APPLIED: [secret]": "XOP_VMP_SELECTION_UNSUPPORTED",
+            "java.lang.OutOfMemoryError: Java heap space": "XOP_PACKER_JAVA_OOM",
+            "Unexpected library error /internal/private": "XOP_PACKER_EXIT_NONZERO",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "packer.log"
+            for message, code in cases.items():
+                with self.subTest(code=code):
+                    path.write_text("x" * 100000 + "\\n" + message)
+                    self.assertEqual(s.classify_packer_failure(path), code)
+            path.unlink()
+            self.assertEqual(s.classify_packer_failure(path), "XOP_PACKER_EXIT_NONZERO")
+
 class ValidationTests(unittest.TestCase):
     def test_options(self):
         v = s.parse_options(encoded({"profile":"perf","protectSo":False,"trueVmpPrefixes":["Lcom/example/"]}))
