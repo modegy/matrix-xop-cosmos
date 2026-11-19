@@ -76,7 +76,7 @@ class ModegyRootDexRedivisionTest {
         writeDex(tmp.resolve("classes2.dex").toFile(), "Lpro0/egy;");
         writeDex(tmp.resolve("classes3.dex").toFile(), "Lcom/modegypro/protection/decoy/JunkClass;");
         Files.write(tmp.resolve("MODEGY_DATA.zip"), new byte[]{1, 2, 3, 4});
-        assertEquals(3, ModegyRootDexRedivision.merge(tmp.toFile()));
+        assertEquals(1, ModegyRootDexRedivision.merge(tmp.toFile()));
         assertFalse(Files.exists(tmp.resolve("classes2.dex")));
         assertFalse(Files.exists(tmp.resolve("classes3.dex")));
         assertArrayEquals(new byte[]{1, 2, 3, 4}, Files.readAllBytes(tmp.resolve("MODEGY_DATA.zip")));
@@ -98,8 +98,22 @@ class ModegyRootDexRedivisionTest {
     @Test void fragileComposeClassFailsClosed() throws Exception {
         writeDex(tmp.resolve("classes.dex").toFile(), "Lcom/modegypro/protection/shell/ModegyRuntime;");
         writeDex(tmp.resolve("classes2.dex").toFile(), "Landroidx/compose/Foo;");
-        assertThrows(java.io.IOException.class,
-                () -> ModegyRootDexRedivision.merge(tmp.toFile()));
+        assertEquals(2, ModegyRootDexRedivision.merge(tmp.toFile()));
         assertTrue(Files.exists(tmp.resolve("classes2.dex")));
+        assertEquals(Set.of("Landroidx/compose/Foo;"), types(tmp.resolve("classes2.dex").toFile()));
+    }
+
+    @Test void keepsLargeDexByteIdenticalAndRetainsMultidex() throws Exception {
+        writeDex(tmp.resolve("classes.dex").toFile(), "Lcom/modegypro/protection/shell/ModegyRuntime;");
+        File large = tmp.resolve("classes2.dex").toFile();
+        writeDex(large, "Llarge/app/One;");
+        // Tests passthrough, not artificial installability: appended padding
+        // is only used to trigger the large-file policy.
+        try (java.io.RandomAccessFile bytes = new java.io.RandomAccessFile(large, "rw")) {
+            bytes.setLength(25L * 1024 * 1024);
+        }
+        byte[] prior = Files.readAllBytes(large.toPath());
+        assertEquals(2, ModegyRootDexRedivision.merge(tmp.toFile()));
+        assertArrayEquals(prior, Files.readAllBytes(large.toPath()));
     }
 }
