@@ -243,6 +243,29 @@ def set_state(job, **updates):
         job["updated"] = int(time.time())
         persist(job)
 
+def classify_packer_failure(log_path):
+    """Return stable non-sensitive codes, never a raw packer stack trace."""
+    try:
+        with log_path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 65536))
+            tail = stream.read(65536).decode("utf-8", errors="replace")
+    except OSError:
+        return "XOP_PACKER_EXIT_NONZERO"
+    if "MODEGY_DEX_SINGLE_FILE_LIMIT_" in tail:
+        return "XOP_DEX_REFERENCE_LIMIT"
+    if "MODEGY_DEX_MERGE_UNSAFE_CLASS" in tail:
+        return "XOP_DEX_MERGE_UNSAFE"
+    if "MODEGY_DEX_DUPLICATE_CLASS" in tail:
+        return "XOP_DEX_DUPLICATE_CLASS"
+    if "MODEGY_SELECTED_VMP_NOT_APPLIED" in tail:
+        return "XOP_VMP_SELECTION_UNSUPPORTED"
+    if ("OutOfMemoryError" in tail or "GC overhead limit exceeded" in tail
+            or "Java heap space" in tail):
+        return "XOP_PACKER_JAVA_OOM"
+    return "XOP_PACKER_EXIT_NONZERO"
+
+
 def process_one(job_id):
     with LOCK:
         job = JOBS[job_id]
@@ -262,7 +285,7 @@ def process_one(job_id):
                 child.wait()
                 reject("XOP_PACKER_TIMEOUT")
         if exit_code:
-            reject("XOP_PACKER_EXIT_NONZERO")
+            reject(classify_packer_failure(folder / "packer.log"))
         if not output.is_file() or not 1024 <= output.stat().st_size <= MAX_OUT:
             reject("XOP_OUTPUT_SIZE_INVALID")
         # Normalize only the worker-generated UNSIGNED APK, before hashing
