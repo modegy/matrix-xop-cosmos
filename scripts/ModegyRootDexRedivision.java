@@ -28,6 +28,29 @@ import java.util.Set;
 public final class ModegyRootDexRedivision {
     private ModegyRootDexRedivision() {}
 
+    /**
+     * A jumbo const-string index is 32-bit. Unlike type/proto/field/method
+     * indices, string_ids_size is NOT restricted to 65535 by the DEX format.
+     * Keep strict 16-bit limits for the other sections instead of rejecting
+     * valid DEX files with >65,535 strings.
+     */
+    static void validateDexReferences(byte[] header) throws IOException {
+        if (header == null || header.length < 112) {
+            throw new IOException("MODEGY_DEX_MERGE_HEADER");
+        }
+        ByteBuffer h = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
+        int stringCount = h.getInt(56);
+        if (stringCount < 0) {
+            throw new IOException("MODEGY_DEX_INVALID_STRING_COUNT");
+        }
+        for (int offset : new int[]{64, 72, 80, 88, 96}) {
+            int count = h.getInt(offset);
+            if (count < 0 || count > 65535) {
+                throw new IOException("MODEGY_DEX_SINGLE_FILE_LIMIT_" + offset + ": " + count);
+            }
+        }
+    }
+
     public static int merge(File apkRoot) throws IOException {
         if (apkRoot == null || !apkRoot.isDirectory()) {
             throw new IOException("MODEGY_DEX_ROOT_INVALID");
@@ -84,15 +107,7 @@ public final class ModegyRootDexRedivision {
                     || header[3] != '\n') {
                 throw new IOException("MODEGY_DEX_MERGE_MAGIC");
             }
-            ByteBuffer h = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
-            // A single DEX has 16-bit reference indices. Never silently
-            // generate a DEX needing jumbo/overflowing methods or field refs.
-            for (int offset : new int[]{56, 64, 72, 80, 88, 96}) {
-                int count = h.getInt(offset);
-                if (count < 0 || count > 65535) {
-                    throw new IOException("MODEGY_DEX_SINGLE_FILE_LIMIT_" + offset + ": " + count);
-                }
-            }
+            validateDexReferences(header);
             Set<String> after = new HashSet<>();
             DexBackedDexFile candidate;
             try (BufferedInputStream in = new BufferedInputStream(new FileInputStream(temp.toFile()))) {
