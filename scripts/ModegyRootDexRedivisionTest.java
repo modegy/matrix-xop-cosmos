@@ -52,6 +52,25 @@ class ModegyRootDexRedivisionTest {
         return out;
     }
 
+    @Test void acceptsLargeStringTableButRejectsActualDexReferenceOverflows() throws Exception {
+        byte[] header = new byte[112];
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(header).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        buf.putInt(56, 70000); // string_ids_size: jumbo const-string is legal
+        ModegyRootDexRedivision.validateDexReferences(header);
+        for (int offset : new int[]{64, 72, 80, 88, 96}) {
+            buf.putInt(offset, 65536);
+            java.io.IOException error = assertThrows(java.io.IOException.class,
+                    () -> ModegyRootDexRedivision.validateDexReferences(header));
+            assertTrue(error.getMessage().contains("MODEGY_DEX_SINGLE_FILE_LIMIT_" + offset));
+            buf.putInt(offset, 0);
+        }
+        buf.putInt(56, -1);
+        assertThrows(java.io.IOException.class,
+                () -> ModegyRootDexRedivision.validateDexReferences(header));
+        assertThrows(java.io.IOException.class,
+                () -> ModegyRootDexRedivision.validateDexReferences(new byte[100]));
+    }
+
     @Test void mergesRootDexOnlyAndPreservesAllClasses() throws Exception {
         writeDex(tmp.resolve("classes.dex").toFile(), "Lcom/modegypro/protection/shell/ModegyRuntime;");
         writeDex(tmp.resolve("classes2.dex").toFile(), "Lpro0/egy;");
