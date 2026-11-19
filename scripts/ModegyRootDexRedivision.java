@@ -21,117 +21,182 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Optional MODEGY root DEX redivision. Merge the shell, plain SDK classes and
- * junk classes into one classes.dex; never touch encrypted MODEGY_DATA.zip.
- * Fails closed on duplicate types, dexlib2-fragile packages or DEX index limits.
+ * Adaptive root DEX redivision after shell embedding.
+ * Android multidex is retained when a safe single root DEX cannot be produced.
+ * The encrypted PDX1 MODEGY_DATA.zip is never read or rewritten.
+ * Original large/fragile root DEX files are passed through byte-for-byte.
  */
 public final class ModegyRootDexRedivision {
+    private static final long MAX_REWRITE_SOURCE_BYTES = 24L * 1024 * 1024;
+    private static final long MAX_GROUP_SOURCE_BYTES = 16L * 1024 * 1024;
+    private static final int MAX_GROUP_CLASSES = 1400;
     private ModegyRootDexRedivision() {}
 
-    /**
-     * A jumbo const-string index is 32-bit. Unlike type/proto/field/method
-     * indices, string_ids_size is NOT restricted to 65535 by the DEX format.
-     * Keep strict 16-bit limits for the other sections instead of rejecting
-     * valid DEX files with >65,535 strings.
-     */
+    private static String name(int index) {
+        return index == 1 ? "classes.dex" : "classes" + index + ".dex";
+    }
+
     static void validateDexReferences(byte[] header) throws IOException {
-        if (header == null || header.length < 112) {
+        if (header == null || header.length < 112)
             throw new IOException("MODEGY_DEX_MERGE_HEADER");
-        }
         ByteBuffer h = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
-        int stringCount = h.getInt(56);
-        if (stringCount < 0) {
-            throw new IOException("MODEGY_DEX_INVALID_STRING_COUNT");
-        }
+        int strings = h.getInt(56);
+        // DEX string IDs support jumbo indices. Other reference sections do not.
+        if (strings < 0) throw new IOException("MODEGY_DEX_INVALID_STRING_COUNT");
         for (int offset : new int[]{64, 72, 80, 88, 96}) {
             int count = h.getInt(offset);
-            if (count < 0 || count > 65535) {
+            if (count < 0 || count > 65535)
                 throw new IOException("MODEGY_DEX_SINGLE_FILE_LIMIT_" + offset + ": " + count);
-            }
         }
     }
 
-    public static int merge(File apkRoot) throws IOException {
-        if (apkRoot == null || !apkRoot.isDirectory()) {
-            throw new IOException("MODEGY_DEX_ROOT_INVALID");
-        }
-        List<File> inputs = new ArrayList<>();
-        File main = new File(apkRoot, "classes.dex");
-        if (!main.isFile()) {
-            throw new IOException("MODEGY_DEX_PRIMARY_MISSING");
-        }
-        inputs.add(main);
-        int i = 2;
-        while (new File(apkRoot, "classes" + i + ".dex").isFile()) {
-            inputs.add(new File(apkRoot, "classes" + i + ".dex"));
-            i++;
-        }
-        File[] all = apkRoot.listFiles((d, n) -> n.matches("classes[0-9]+\\.dex"));
-        if (all != null && all.length != inputs.size() - 1) {
-            throw new IOException("MODEGY_DEX_NONCONTIGUOUS");
-        }
-        if (inputs.size() == 1) {
-            return 1;
-        }
-
-        Set<String> before = new HashSet<>();
-        DexPool merged = new DexPool(Opcodes.getDefault());
-        for (File dexPath : inputs) {
-            DexBackedDexFile dex;
-            try (BufferedInputStream in = new BufferedInputStream(new FileInputStream(dexPath))) {
-                dex = DexBackedDexFile.fromInputStream(Opcodes.getDefault(), in);
-            }
-            for (ClassDef clazz : dex.getClasses()) {
-                String descriptor = clazz.getType();
-                if (!before.add(descriptor)) {
-                    throw new IOException("MODEGY_DEX_DUPLICATE_CLASS: " + descriptor);
-                }
-                // DexPool rewriting these classes is known to break some apps.
-                if (DexClassSplit.isDexPoolFragileType(descriptor)) {
-                    throw new IOException("MODEGY_DEX_MERGE_UNSAFE_CLASS: " + descriptor);
-                }
-                merged.internClass(clazz);
-            }
-        }
-
-        Path temp = Files.createTempFile(apkRoot.toPath(), ".modegy-root-", ".dex");
-        try {
-            merged.writeTo(new FileDataStore(temp.toFile()));
-            byte[] header = new byte[112];
-            try (FileInputStream input = new FileInputStream(temp.toFile())) {
-                if (input.read(header) != header.length) {
-                    throw new IOException("MODEGY_DEX_MERGE_HEADER");
-                }
-            }
-            if (header[0] != 'd' || header[1] != 'e' || header[2] != 'x'
-                    || header[3] != '\n') {
+    private static void inspectWrittenDex(Path path, List<ClassDef> original)
+            throws IOException {
+        byte[] header = new byte[112];
+        try (FileInputStream in = new FileInputStream(path.toFile())) {
+            if (in.read(header) != 112 || header[0] != 'd' || header[1] != 'e'
+                    || header[2] != 'x' || header[3] != '\n')
                 throw new IOException("MODEGY_DEX_MERGE_MAGIC");
-            }
-            validateDexReferences(header);
-            Set<String> after = new HashSet<>();
-            DexBackedDexFile candidate;
-            try (BufferedInputStream in = new BufferedInputStream(new FileInputStream(temp.toFile()))) {
-                candidate = DexBackedDexFile.fromInputStream(Opcodes.getDefault(), in);
-            }
-            for (ClassDef clazz : candidate.getClasses()) {
-                if (!after.add(clazz.getType())) {
+        }
+        validateDexReferences(header);
+        Set<String> expected = new HashSet<>();
+        for (ClassDef c : original)
+            if (!expected.add(c.getType()))
+                throw new IOException("MODEGY_DEX_DUPLICATE_CLASS");
+        Set<String> found = new HashSet<>();
+        try (BufferedInputStream in =
+                 new BufferedInputStream(new FileInputStream(path.toFile()))) {
+            DexBackedDexFile dex = DexBackedDexFile.fromInputStream(Opcodes.getDefault(), in);
+            for (ClassDef c : dex.getClasses())
+                if (!found.add(c.getType()))
                     throw new IOException("MODEGY_DEX_OUTPUT_DUPLICATE");
+        }
+        if (!found.equals(expected))
+            throw new IOException("MODEGY_DEX_CLASS_SET_CHANGED");
+    }
+
+    /**
+     * Write a bounded batch. If the combined references overflow, split at a
+     * class boundary and keep multiple root DEX files rather than failing the
+     * whole APK. Never change any class definition or method implementation.
+     */
+    private static int writeGroup(List<ClassDef> classes, Path staged, int next)
+            throws IOException {
+        if (classes.isEmpty()) return next;
+        Path candidate = staged.resolve(name(next));
+        try {
+            DexPool pool = new DexPool(Opcodes.getDefault());
+            for (ClassDef c : classes) pool.internClass(c);
+            pool.writeTo(new FileDataStore(candidate.toFile()));
+            inspectWrittenDex(candidate, classes);
+            return next + 1;
+        } catch (IOException e) {
+            Files.deleteIfExists(candidate);
+            if (!e.getMessage().startsWith("MODEGY_DEX_SINGLE_FILE_LIMIT_")
+                    || classes.size() == 1) throw e;
+            int halfway = classes.size() / 2;
+            next = writeGroup(classes.subList(0, halfway), staged, next);
+            return writeGroup(classes.subList(halfway, classes.size()), staged, next);
+        }
+    }
+
+    private static int flush(List<ClassDef> pending, Path staged, int index)
+            throws IOException {
+        if (pending.isEmpty()) return index;
+        index = writeGroup(pending, staged, index);
+        pending.clear();
+        return index;
+    }
+
+    public static int merge(File apkRoot) throws IOException {
+        if (apkRoot == null || !apkRoot.isDirectory())
+            throw new IOException("MODEGY_DEX_ROOT_INVALID");
+        List<File> original = new ArrayList<>();
+        for (int i = 1; ; i++) {
+            File file = new File(apkRoot, name(i));
+            if (!file.isFile()) {
+                if (i == 1) throw new IOException("MODEGY_DEX_PRIMARY_MISSING");
+                break;
+            }
+            original.add(file);
+        }
+        File[] all = apkRoot.listFiles((d, n) -> n.matches("classes[2-9][0-9]*\\.dex|classes[1-9][0-9]+\\.dex"));
+        if (all != null && all.length != original.size() - 1)
+            throw new IOException("MODEGY_DEX_NONCONTIGUOUS");
+        if (original.size() == 1) return 1;
+
+        Path staged = Files.createTempDirectory(apkRoot.toPath(), ".modegy-redivision-");
+        int next = 1;
+        int copied = 0;
+        List<ClassDef> pending = new ArrayList<>();
+        Set<String> seenInGroup = new HashSet<>();
+        long groupBytes = 0;
+        try {
+            for (File file : original) {
+                // Large inputs are already valid DEX files. Rewriting their
+                // methods via DexPool causes excessive memory use and risks
+                // breaking obfuscated/Compose instructions.
+                if (file.length() > MAX_REWRITE_SOURCE_BYTES) {
+                    next = flush(pending, staged, next);
+                    seenInGroup.clear(); groupBytes = 0;
+                    Files.copy(file.toPath(), staged.resolve(name(next++)));
+                    copied++;
+                    continue;
                 }
-            }
-            if (!after.equals(before)) {
-                throw new IOException("MODEGY_DEX_CLASS_SET_CHANGED");
-            }
-            Files.move(temp, main.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            for (int j = 1; j < inputs.size(); j++) {
-                if (!inputs.get(j).delete()) {
-                    throw new IOException("MODEGY_DEX_SECONDARY_DELETE_FAILED");
+                DexBackedDexFile dex;
+                try (BufferedInputStream in =
+                         new BufferedInputStream(new FileInputStream(file))) {
+                    dex = DexBackedDexFile.fromInputStream(Opcodes.getDefault(), in);
                 }
+                boolean fragile = false;
+                for (ClassDef c : dex.getClasses()) {
+                    if (DexClassSplit.isDexPoolFragileType(c.getType())) {
+                        fragile = true;
+                        break;
+                    }
+                }
+                if (fragile) {
+                    next = flush(pending, staged, next);
+                    seenInGroup.clear(); groupBytes = 0;
+                    Files.copy(file.toPath(), staged.resolve(name(next++)));
+                    copied++;
+                    continue;
+                }
+                if (groupBytes + file.length() > MAX_GROUP_SOURCE_BYTES) {
+                    next = flush(pending, staged, next);
+                    seenInGroup.clear(); groupBytes = 0;
+                }
+                for (ClassDef c : dex.getClasses()) {
+                    if (pending.size() >= MAX_GROUP_CLASSES ||
+                            seenInGroup.contains(c.getType())) {
+                        next = flush(pending, staged, next);
+                        seenInGroup.clear(); groupBytes = 0;
+                    }
+                    pending.add(c);
+                    seenInGroup.add(c.getType());
+                }
+                groupBytes += file.length();
             }
-            System.out.println("MODEGY DEX redivision: " + inputs.size()
-                    + " root DEX files -> classes.dex; classes=" + before.size());
-            return inputs.size();
+            next = flush(pending, staged, next);
+            int count = next - 1;
+            if (count < 1) throw new IOException("MODEGY_DEX_OUTPUT_EMPTY");
+            // No changes to the APK root until every output is generated and
+            // validated. The packer operates on a disposable unpack directory.
+            for (int i = 1; i <= count; i++)
+                Files.move(staged.resolve(name(i)),
+                        new File(apkRoot, name(i)).toPath(),
+                        StandardCopyOption.REPLACE_EXISTING);
+            for (int i = count + 1; i <= original.size(); i++)
+                Files.deleteIfExists(new File(apkRoot, name(i)).toPath());
+            System.out.println("MODEGY adaptive root DEX redivision: input=" +
+                    original.size() + " output=" + count +
+                    " untouched_large_or_fragile=" + copied);
+            return count;
         } finally {
-            Files.deleteIfExists(temp);
+            File[] leftovers = staged.toFile().listFiles();
+            if (leftovers != null)
+                for (File f : leftovers) Files.deleteIfExists(f.toPath());
+            Files.deleteIfExists(staged);
         }
     }
 }
