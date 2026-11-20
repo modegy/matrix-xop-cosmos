@@ -312,13 +312,13 @@ def patch_nexus_vpn_rescan(root: Path) -> None:
            "            Log.i(TAG, \"installed detect_proxy=\" + detectProxy")
     change("                    ModegyNativeBridge.reportThreat(hit);",
            "                    lastThreat = hit;\n"
-           "                    JniBridge.reportThreat(hit);")
-    change("        if (hit != null) {\n            proxyHit = true;\n            JniBridge.reportThreat(hit);\n        }\n        return hit;",
+           "                    ModegyNativeBridge.reportThreat(hit);")
+    change("        if (hit != null) {\n            proxyHit = true;\n            ModegyNativeBridge.reportThreat(hit);\n        }\n        return hit;",
            "        if (hit != null) {\n"
            "            proxyHit = true;\n"
            "            if (!hit.equals(lastThreat)) {\n"
            "                lastThreat = hit;\n"
-           "                JniBridge.reportThreat(hit);\n"
+           "                ModegyNativeBridge.reportThreat(hit);\n"
            "            }\n"
            "        } else {\n"
            "            lastThreat = null;\n"
@@ -332,8 +332,6 @@ def patch_nexus_vpn_rescan(root: Path) -> None:
            "        }, 5, 10, TimeUnit.SECONDS);\n"
            "    }\n\n"
            "    private static boolean notBlank(String s) {")
-    change("        return null;\n    }\n\n    private static boolean notBlank(String s) {",
-           "        return null;\n    }\n\n    private static boolean notBlank(String s) {") if False else None
     # NetworkInterface is a fallback when the input APK has no
     # ACCESS_NETWORK_STATE permission; it is heuristic, not a proof of VPN.
     change("        if (detectVpn) {\n            try {\n                ConnectivityManager cm =",
