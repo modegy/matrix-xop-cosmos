@@ -95,6 +95,19 @@ class ValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"XOP_OPTIONS_INVALID"):
                 s.parse_options(encoded({"detectProxy":bad}))
 
+    def test_nexus_pvm2_only_when_selected(self):
+        base = {"profile": "balanced", "protectSo": True}
+        plain = s.cli_args(s.parse_options(encoded(base)), Path("a.apk"), Path("b.apk"), Path("/tmp"))
+        self.assertIn("--no-payment-auto-vmp", plain)
+        self.assertIn("--no-industry-auto-vmp", plain)
+        self.assertNotIn("--true-vmp-prefix", plain)
+        scopes = ["Lsample/one/Foo;", "Lsample/two/Bar;"]
+        explicit = s.cli_args(s.parse_options(encoded({**base, "trueVmpPrefixes": scopes})),
+                              Path("a.apk"), Path("b.apk"), Path("/tmp"))
+        self.assertEqual(explicit.count("--true-vmp-prefix"), len(scopes))
+        self.assertIn("--no-payment-auto-vmp", explicit)
+        self.assertIn("--no-industry-auto-vmp", explicit)
+
     def test_vmp_256_and_so_abi_selection(self):
         scope = ["Lsample/app/Feature%d;" % i for i in range(256)]
         for abi in ("all", "arm64-v8a", "armeabi-v7a", "x86", "x86_64"):
