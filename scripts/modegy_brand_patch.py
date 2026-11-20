@@ -245,37 +245,36 @@ def patch_cryptographic_identity(root: Path) -> None:
 
 
 
-def patch_strict_selected_vmp(root: Path) -> None:
-    """Explicitly requested VMP must protect at least one method per scope."""
-    p = root / "packer/src/main/java/com/yqsh/protector/packer/PackerMain.java"
-    s = p.read_text(encoding="utf-8")
-    def ch(old: str, new: str) -> None:
-        nonlocal s
-        if s.count(old) != 1:
-            raise RuntimeError("Explicit VMP source drift " + old[:100])
-        s = s.replace(old, new, 1)
-    ch("    private final List<String> trueVmpPrefixes = new ArrayList<>();",
-       "    private final List<String> trueVmpPrefixes = new ArrayList<>();\n"
-       "    private final Set<String> admittedExplicitVmp = new HashSet<>();")
-    ch("            pvm2Admission.reset();",
-       "            pvm2Admission.reset();\n"
-       "            admittedExplicitVmp.clear();")
-    ch('            System.out.println(pvm2Admission.admissionLine());',
-       '            if (!admittedExplicitVmp.containsAll(trueVmpPrefixes)) {\n'
-       '                Set<String> unsupported = new LinkedHashSet<>(trueVmpPrefixes);\n'
-       '                unsupported.removeAll(admittedExplicitVmp);\n'
-       '                throw new IOException("MODEGY_SELECTED_VMP_NOT_APPLIED: " + unsupported);\n'
-       '            }\n'
-       '            System.out.println(pvm2Admission.admissionLine());')
-    ch('            pvm2Admission.noteSuccess();',
-       '            pvm2Admission.noteSuccess();\n'
-       '            for (String requested : trueVmpPrefixes) {\n'
-       '                if (typeDescriptor.startsWith(requested)) {\n'
-       '                    admittedExplicitVmp.add(requested);\n'
-       '                }\n'
-       '            }')
-    p.write_text(s, encoding="utf-8")
-    print("Explicit True-VMP scope admission fails closed when no selected method was protected")
+def verify_official_true_vmp_fallback(root: Path) -> None:
+    """Retain official XopProtector method-level PVM2 admission semantics.
+
+    Unsupported instructions and untransformable methods must not abort an
+    otherwise valid encrypted APK. Do not pretend a skipped method became VM.
+    """
+    packer = root / "packer/src/main/java/com/yqsh/protector/packer/PackerMain.java"
+    dex_layout = root / "packer/src/main/java/com/yqsh/protector/packer/DexLayout.java"
+    policy = root / "packer/src/main/java/com/yqsh/protector/packer/AutoVmpPolicy.java"
+    body = packer.read_text(encoding="utf-8")
+    layout = dex_layout.read_text(encoding="utf-8")
+    true_vmp = policy.read_text(encoding="utf-8")
+    for marker in (
+        "pvm2Admission.noteFail(compiled.failReason);",
+        "pvm2Admission.noteSuccess();",
+        "System.out.println(pvm2Admission.admissionLine());",
+        "System.out.println(pvm2Admission.skipReasonsLine());",
+        "return null;",
+    ):
+        if marker not in body:
+            raise RuntimeError("MODEGY expected official PVM2 behavior missing: " + marker)
+    if "matchesPrefixList(typeDescriptor, ctx.trueVmpPrefixes)" not in layout:
+        raise RuntimeError("MODEGY selected VMP class extraction is missing")
+    if "typeDescriptor.startsWith(prefix)" not in true_vmp:
+        raise RuntimeError("MODEGY selected VMP class matching is missing")
+    if ("MODEGY_SELECTED_VMP_NOT_APPLIED" in body
+            or "admittedExplicitVmp" in body):
+        raise RuntimeError("MODEGY non-upstream strict VMP gate is still present")
+    print("Official XOP True-VMP admission retained: method-level skips are reported,")
+    print("not misreported as VMP2 or used to abort the entire encrypted DEX build")
 
 
 def patch_selected_runtime_rasp(root: Path) -> None:
@@ -771,7 +770,7 @@ def patch_tree(root: Path) -> None:
     patch_cryptographic_identity(root)
     patch_modegy_dex_redivision(root)
     patch_selected_runtime_rasp(root)
-    patch_strict_selected_vmp(root)
+    verify_official_true_vmp_fallback(root)
     patch_runtime_identity_and_diagnostics(root)
 
     # Fail the build if the app's JNI bridge or class-loader factory attempts
