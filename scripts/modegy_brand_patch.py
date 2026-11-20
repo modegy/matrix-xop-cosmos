@@ -283,7 +283,7 @@ def patch_nexus_vpn_rescan(root: Path) -> None:
     XOP's original install() only scans once. Keep its official soft reporting
     semantics; do not turn heuristics into an unreviewed process killer.
     """
-    p = root / "native/src/main/java/com/yqsh/protector/shell/NetGuard.java"
+    p = root / "native/src/main/java/com/modegypro/protection/shell/NetGuard.java"
     src = p.read_text(encoding="utf-8")
     def change(old: str, new: str) -> None:
         nonlocal src
@@ -310,7 +310,7 @@ def patch_nexus_vpn_rescan(root: Path) -> None:
     change("            Log.i(TAG, \"installed detect_proxy=\" + detectProxy",
            "            if (detectProxy || detectVpn) startBackgroundScan(context.getApplicationContext());\n"
            "            Log.i(TAG, \"installed detect_proxy=\" + detectProxy")
-    change("                    JniBridge.reportThreat(hit);",
+    change("                    ModegyNativeBridge.reportThreat(hit);",
            "                    lastThreat = hit;\n"
            "                    JniBridge.reportThreat(hit);")
     change("        if (hit != null) {\n            proxyHit = true;\n            JniBridge.reportThreat(hit);\n        }\n        return hit;",
