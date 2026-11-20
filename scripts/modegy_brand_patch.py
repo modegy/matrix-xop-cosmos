@@ -277,6 +277,82 @@ def verify_official_true_vmp_fallback(root: Path) -> None:
     print("not misreported as VMP2 or used to abort the entire encrypted DEX build")
 
 
+def patch_nexus_vpn_rescan(root: Path) -> None:
+    """NetGuard is opt-in; rescan after VPN is enabled post-launch.
+
+    XOP's original install() only scans once. Keep its official soft reporting
+    semantics; do not turn heuristics into an unreviewed process killer.
+    """
+    p = root / "native/src/main/java/com/yqsh/protector/shell/NetGuard.java"
+    src = p.read_text(encoding="utf-8")
+    def change(old: str, new: str) -> None:
+        nonlocal src
+        if src.count(old) != 1:
+            raise RuntimeError("MODEGY NetGuard source drift: " + old[:100])
+        src = src.replace(old, new, 1)
+    change("import java.util.Collections;",
+           "import java.util.Collections;\n"
+           "import java.util.Enumeration;\n"
+           "import java.net.NetworkInterface;\n"
+           "import java.util.concurrent.Executors;\n"
+           "import java.util.concurrent.ScheduledExecutorService;\n"
+           "import java.util.concurrent.TimeUnit;")
+    change("    private static volatile boolean proxyHit;",
+           "    private static volatile boolean proxyHit;\n"
+           "    private static volatile String lastThreat;\n"
+           "    private static final AtomicBoolean watcherStarted = new AtomicBoolean(false);\n"
+           "    private static final ScheduledExecutorService watcher =\n"
+           "            Executors.newSingleThreadScheduledExecutor(r -> {\n"
+           "                Thread thread = new Thread(r, \"modegy-netguard\");\n"
+           "                thread.setDaemon(true);\n"
+           "                return thread;\n"
+           "            });")
+    change("            Log.i(TAG, \"installed detect_proxy=\" + detectProxy",
+           "            if (detectProxy || detectVpn) startBackgroundScan(context.getApplicationContext());\n"
+           "            Log.i(TAG, \"installed detect_proxy=\" + detectProxy")
+    change("                    JniBridge.reportThreat(hit);",
+           "                    lastThreat = hit;\n"
+           "                    JniBridge.reportThreat(hit);")
+    change("        if (hit != null) {\n            proxyHit = true;\n            JniBridge.reportThreat(hit);\n        }\n        return hit;",
+           "        if (hit != null) {\n"
+           "            proxyHit = true;\n"
+           "            if (!hit.equals(lastThreat)) {\n"
+           "                lastThreat = hit;\n"
+           "                JniBridge.reportThreat(hit);\n"
+           "            }\n"
+           "        } else {\n"
+           "            lastThreat = null;\n"
+           "        }\n"
+           "        return hit;")
+    change("    private static boolean notBlank(String s) {",
+           "    private static void startBackgroundScan(Context context) {\n"
+           "        if (!watcherStarted.compareAndSet(false, true)) return;\n"
+           "        watcher.scheduleWithFixedDelay(() -> {\n"
+           "            try { rescan(context); } catch (Throwable ignored) { }\n"
+           "        }, 5, 10, TimeUnit.SECONDS);\n"
+           "    }\n\n"
+           "    private static boolean notBlank(String s) {")
+    change("        return null;\n    }\n\n    private static boolean notBlank(String s) {",
+           "        return null;\n    }\n\n    private static boolean notBlank(String s) {") if False else None
+    # NetworkInterface is a fallback when the input APK has no
+    # ACCESS_NETWORK_STATE permission; it is heuristic, not a proof of VPN.
+    change("        if (detectVpn) {\n            try {\n                ConnectivityManager cm =",
+           "        if (detectVpn) {\n"
+           "            try {\n"
+           "                Enumeration<NetworkInterface> all = NetworkInterface.getNetworkInterfaces();\n"
+           "                while (all != null && all.hasMoreElements()) {\n"
+           "                    NetworkInterface iface = all.nextElement();\n"
+           "                    String name = iface.getName();\n"
+           "                    if (name != null && name.matches(\"(?:tun|ppp|wg)[0-9]+\")\n"
+           "                            && iface.isUp()) return \"vpn_interface\";\n"
+           "                }\n"
+           "            } catch (Throwable ignored) { }\n"
+           "            try {\n"
+           "                ConnectivityManager cm =")
+    p.write_text(src, encoding="utf-8")
+    print("NetGuard opt-in startup and periodic runtime VPN detection patched")
+
+
 def patch_selected_runtime_rasp(root: Path) -> None:
     """Fix one-shot checks running before the authenticated runtime policy loads."""
     def change(path: str, old: str, new: str) -> None:
@@ -770,6 +846,7 @@ def patch_tree(root: Path) -> None:
     patch_cryptographic_identity(root)
     patch_modegy_dex_redivision(root)
     patch_selected_runtime_rasp(root)
+    patch_nexus_vpn_rescan(root)
     verify_official_true_vmp_fallback(root)
     patch_runtime_identity_and_diagnostics(root)
 
