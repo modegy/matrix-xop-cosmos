@@ -277,6 +277,41 @@ def verify_official_true_vmp_fallback(root: Path) -> None:
     print("not misreported as VMP2 or used to abort the entire encrypted DEX build")
 
 
+def patch_modegy_resource_map_encryption(root: Path) -> None:
+    """AES-GCM seal the optional resource path map; Android never reads this map.
+
+    resources.arsc remains in Android's original readable binary resource format.
+    """
+    p = root / "packer/src/main/java/com/yqsh/protector/packer/PackerMain.java"
+    content = p.read_text(encoding="utf-8")
+    old = "                ResPathObfuscator.remapStoreEntries(storeEntries, rr.mapping);"
+    new = old + """
+                // Protect the diagnostic original→short resource paths mapping.
+                // AES-GCM uses a new 96-bit IV and a 128-bit tag per APK.
+                File resMapFile = new File(assetsProtector, ResPathObfuscator.MAPPING_NAME);
+                if (!resMapFile.isFile() || resMapFile.length() == 0)
+                    throw new IOException("MODEGY_RESOURCE_MAP_MISSING");
+                byte[] resMapPlain = Files.readAllBytes(resMapFile.toPath());
+                try {
+                    byte[] sealedMap = CryptoUtils.aesGcmEncrypt(assetsAesKey, resMapPlain);
+                    if (sealedMap == null || sealedMap.length < 29)
+                        throw new IOException("MODEGY_RESOURCE_MAP_ENCRYPTION_FAILED");
+                    byte[] wrapped = new byte[5 + sealedMap.length];
+                    wrapped[0] = 'M'; wrapped[1] = 'R'; wrapped[2] = 'E';
+                    wrapped[3] = 'S'; wrapped[4] = '1';
+                    System.arraycopy(sealedMap, 0, wrapped, 5, sealedMap.length);
+                    Files.write(resMapFile.toPath(), wrapped);
+                    Arrays.fill(sealedMap, (byte) 0);
+                    Arrays.fill(wrapped, (byte) 0);
+                } finally {
+                    Arrays.fill(resMapPlain, (byte) 0);
+                }"""
+    if content.count(old) != 1:
+        raise RuntimeError("MODEGY resource mapping stage drift")
+    p.write_text(content.replace(old, new, 1), encoding="utf-8")
+    print("MODEGY_RESOURCE.dat is AES-GCM sealed with per-APK derived assets key")
+
+
 def patch_nexus_vpn_rescan(root: Path) -> None:
     """NetGuard is opt-in; rescan after VPN is enabled post-launch.
 
@@ -845,6 +880,7 @@ def patch_tree(root: Path) -> None:
     patch_modegy_dex_redivision(root)
     patch_selected_runtime_rasp(root)
     patch_nexus_vpn_rescan(root)
+    patch_modegy_resource_map_encryption(root)
     verify_official_true_vmp_fallback(root)
     patch_runtime_identity_and_diagnostics(root)
 
