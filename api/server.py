@@ -107,6 +107,7 @@ def cli_args(options, src, dst, tmp):
     cmd = ["java", "-Xms64m", "-Xmx%dm" % JAVA_HEAP_MB, "-Djava.io.tmpdir=" + str(tmp),
            "-jar", str(PACKER), str(src), "-o", str(dst), "--shell-dir", str(SHELL),
            "--profile", options["profile"], "--json-progress",
+           "--no-payment-auto-vmp", "--no-industry-auto-vmp",
            "--protect-so" if options.get("protectSo", True) else "--no-protect-so"]
     for key, flag in (("encryptAssets", "--encrypt-assets"),
                       ("enableResProtect", "--enable-res-protect"),
