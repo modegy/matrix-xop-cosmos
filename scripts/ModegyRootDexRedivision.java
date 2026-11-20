@@ -118,6 +118,54 @@ public final class ModegyRootDexRedivision {
         }
     }
 
+    /**
+     * Attempt one root DEX before bounded redivision. The old 1400-class
+     * batching threshold is a memory-safety heuristic, NOT a DEX format
+     * restriction. Retain adaptive multidex only when one DEX is unsafe.
+     */
+    private static boolean trySingleDex(List<File> original, Path staged) throws IOException {
+        long totalSourceBytes = 0;
+        for (File file : original) {
+            if (file.length() > MAX_REWRITE_SOURCE_BYTES) return false;
+            totalSourceBytes += file.length();
+            if (totalSourceBytes > MAX_GROUP_SOURCE_BYTES) return false;
+        }
+        List<ClassDef> classes = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (File file : original) {
+            DexBackedDexFile dex;
+            try (BufferedInputStream in =
+                    new BufferedInputStream(new FileInputStream(file))) {
+                dex = DexBackedDexFile.fromInputStream(Opcodes.getDefault(), in);
+            }
+            for (ClassDef type : dex.getClasses()) {
+                if (!seen.add(type.getType()))
+                    throw new IOException("MODEGY_DEX_DUPLICATE_CLASS: " + type.getType());
+                // Keep known DexPool-fragile namespaces byte-for-byte in
+                // the original adaptive multidex path.
+                if (DexClassSplit.isDexPoolFragileType(type.getType()))
+                    return false;
+                classes.add(type);
+            }
+        }
+        if (classes.isEmpty()) return false;
+        int next = writeGroup(classes, staged, 1);
+        if (next != 2) {
+            // A genuine DEX reference overflow caused a safe split.
+            for (int i = 1; i < next; i++)
+                Files.deleteIfExists(staged.resolve(name(i)));
+            return false;
+        }
+        // The candidate passed reference-limit and exact class-set checks.
+        Files.move(staged.resolve(name(1)), original.get(0).toPath(),
+                StandardCopyOption.REPLACE_EXISTING);
+        for (int i = 1; i < original.size(); i++)
+            Files.deleteIfExists(original.get(i).toPath());
+        System.out.println("MODEGY adaptive root DEX redivision: input="
+                + original.size() + " output=1 single_safe=true");
+        return true;
+    }
+
     public static int merge(File apkRoot) throws IOException {
         if (apkRoot == null || !apkRoot.isDirectory())
             throw new IOException("MODEGY_DEX_ROOT_INVALID");
@@ -136,6 +184,14 @@ public final class ModegyRootDexRedivision {
         if (original.size() == 1) return 1;
 
         Path staged = Files.createTempDirectory(apkRoot.toPath(), ".modegy-redivision-");
+        // Prefer a validated single DEX for small, non-fragile outputs.
+        try {
+            if (trySingleDex(original, staged)) return 1;
+        } finally {
+            File[] trial = staged.toFile().listFiles();
+            if (trial != null)
+                for (File f : trial) Files.deleteIfExists(f.toPath());
+        }
         int next = 1;
         int copied = 0;
         List<ClassDef> pending = new ArrayList<>();
